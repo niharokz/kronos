@@ -1,0 +1,10 @@
+# Personal config and secrets — never committed
+kronos.yml
+config/*
+!config/.gitkeep
+scripts/*
+!scripts/disk_check.sh.example
+.env
+
+# Build output
+/kronos

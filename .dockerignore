@@ -1,0 +1,6 @@
+.git
+kronos.yml
+config/
+scripts/
+.env
+*.md

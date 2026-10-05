@@ -1,0 +1,27 @@
+#!/bin/sh
+# Example script job: Telegram alert when /data is over 90% full.
+#
+#   cp scripts/disk_check.sh.example scripts/disk_check.sh
+#   # kronos.yml:
+#   #   disk_check:
+#   #     schedule: "0 4 * * *"
+#   #     description: "Warn when the data disk is over 90% full."
+#   #     command: ["sh", "/app/scripts/disk_check.sh"]
+#
+# Script jobs get every paths: entry as KRONOS_<NAME> (KRONOS_EVENTS, KRONOS_INBOX, …),
+# plus KRONOS_JOB and KRONOS_DRY_RUN (1 during `kronos run <job> --dry-run`).
+# Exit non-zero to mark the run FAIL (Kronos then sends an alert by itself).
+
+limit=90
+used=$(df -P /data | awk 'NR==2 { sub("%", "", $5); print $5 }')
+
+if [ "$used" -lt "$limit" ]; then
+  echo "disk ok: ${used}%"
+  exit 0
+fi
+
+if [ "$KRONOS_DRY_RUN" = "1" ]; then
+  echo "would alert: /data is ${used}% full"
+  exit 0
+fi
+kronos notify --kind alert --title disk_check "/data is ${used}% full (limit ${limit}%)"

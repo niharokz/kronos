@@ -1,0 +1,31 @@
+# All host-specific values come from .env (see .env.example) — nothing personal is committed.
+services:
+  kronos:
+    build:
+      context: .
+      args:
+        VERSION: "1.0.0"
+    container_name: kronos
+    restart: unless-stopped
+    init: true                                      # proper PID 1 for script jobs (signals, zombie reaping)
+    user: "${PUID:-1000}:${PGID:-1000}"             # .env PUID/PGID: owner of every file Kronos writes
+
+    environment:
+      - TZ=${TZ:-UTC}                               # .env TZ: zone for the cron times in kronos.yml
+
+    volumes:
+      - ${NOTE_PATH:?set NOTE_PATH in .env}:/data/notes   # .env NOTE_PATH → kronos.yml paths under /data/notes
+      - ${WEB_PATH:?set WEB_PATH in .env}:/docker/web     # .env WEB_PATH → kronos.yml paths.health_site
+      - ./kronos.yml:/app/kronos.yml:ro             # schedule + paths (copy from kronos.yml.example)
+      - ./config:/app/config                        # kronos.yml paths.google_token (rewritten on refresh)
+      - ./scripts:/app/scripts:ro                   # script jobs (command:) — no rebuild needed
+
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 1m                           # a running job finishes before the container stops
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
