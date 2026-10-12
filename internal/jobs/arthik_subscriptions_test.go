@@ -2,7 +2,6 @@ package jobs
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -96,39 +95,5 @@ func TestArthikSubscriptions(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(out); !strings.Contains(string(b), "drafts: []") || !strings.Contains(string(b), "last_run: '2027-01-14'") {
 		t.Fatalf("not pruned:\n%s", b)
-	}
-}
-
-func TestArthikInboxNotify(t *testing.T) {
-	c, dir, _ := testCtx(t, "2026-10-14", false)
-	c.Cfg.Paths["finance_inbox"] = dir + "/finance/inbox"
-	if err := arthikInboxNotify(c); err != nil { // no drafts file yet: quiet
-		t.Fatal(err)
-	}
-	_ = os.MkdirAll(dir+"/finance/inbox", 0o755)
-	put(t, dir+"/finance/inbox/drafts.md", `# arthik inbox
-updated: '2026-10-14 07:00:00'
-
-drafts:
-  - {id: a, status: pending, date: '2026-10-13', time: '20:34', type: expense, amount: '2000.00', title: Amazon gift card}
-  - {id: b, status: pending, date: '2026-10-14', type: income, amount: '125000.00', title: Salary}
-  - {id: c, status: accepted, date: '2026-10-12', type: expense, amount: '99.00', title: Old}
-  - {id: d, status: pending, date: '2026-10-11', type: expense, amount: '131.00', title: Swiggy}
-  - {id: e, status: pending, date: '2026-10-10', type: transfer, amount: '18450.00', title: Payment to card}
-`)
-	c.Job.Options = map[string]any{"top": 2, "link": "https://arthik.example/app#/inbox"}
-	if err := arthikInboxNotify(c); err != nil {
-		t.Fatal(err)
-	}
-	files, _ := filepath.Glob(dir + "/outbox/*.json")
-	if len(files) != 1 {
-		t.Fatalf("outbox %v", files)
-	}
-	b, _ := os.ReadFile(files[0])
-	msg := string(b)
-	for _, want := range []string{"4 draft(s) to review", "out ₹2,131.00", "in ₹1,25,000.00", "+₹1,25,000.00 Salary", "−₹2,000.00 Amazon gift card", "… and 2 more", "arthik.example"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("message lacks %q:\n%s", want, msg)
-		}
 	}
 }

@@ -1,15 +1,19 @@
-// Package jobs holds Kronos's built-in jobs, one file per job.
+// Package jobs holds Kronos's built-in jobs. Each job is self-contained:
 //
-// Each file registers itself in an init() function:
+//	<name>.go       the job; registers itself: func init() { job.Register("<name>", fn) }
+//	<name>_test.go  its tests (shared test helpers are in jobs_test.go)
 //
-//	func init() { job.Register("event_update", eventUpdate) }
+// plus one entry under jobs: in kronos.yml.example (and your kronos.yml).
 //
-// and is switched on by an entry with the same name in kronos.yml. To add a
-// job, copy any small file here (archive_rollover.go is the simplest), give
-// it a new name, add it to kronos.yml, and rebuild.
+// Add a job: copy a small job (archive_rollover.go), rename it, add its
+// kronos.yml.example entry, rebuild. New paths go in config.defaultPaths and
+// the example's paths:.
 //
-// The jobs are a 1:1 port of Taskmaster's Python tasks: same names, same
-// rules, same order of steps, same log messages. The only intended
-// behaviour differences are listed in ARCHITECTURE.md ("Differences from
-// Taskmaster").
+// Remove a job: delete <name>.go and <name>_test.go, delete its entries in
+// kronos.yml.example and kronos.yml, rebuild.
+//
+// registry_test.go fails if the registered jobs and kronos.yml.example
+// disagree, so a half-removed job is caught by `go test`.
+//
+// Code shared by several jobs lives in helpers.go; nothing job-specific goes there.
 package jobs

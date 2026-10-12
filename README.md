@@ -250,14 +250,14 @@ func waterReminder(c *job.Ctx) error {
 ```
 
 ```yaml
-# kronos.yml
+# kronos.yml.example and your kronos.yml
   water_reminder:
     schedule: "0 11,16 * * *"
     description: "Water reminder."
     options: { text: "💧 Drink water" }
 ```
 
-Then `docker compose up -d --build`. Every job gets a `*job.Ctx` with:
+Put its tests in `internal/jobs/water_reminder_test.go`, then `docker compose up -d --build`. Every job gets a `*job.Ctx` with:
 
 | | |
 |---|---|
@@ -270,6 +270,10 @@ Then `docker compose up -d --build`. Every job gets a `*job.Ctx` with:
 | `c` itself | A `context.Context` carrying the timeout — pass it to HTTP calls |
 
 `internal/store` has the YAML helpers the built-in jobs use (`LoadRecords`, `RecordsYAML`, `Get/Set` …), and `internal/dates` the date rules.
+
+### Removing a job
+
+Delete `internal/jobs/<name>.go` and `<name>_test.go`, remove its entry from `kronos.yml.example` and your `kronos.yml`, and rebuild. `go test` (also run by `docker build`) fails if a job is registered but missing from `kronos.yml.example`, or the other way round — so a half-removed job never ships.
 
 ### A script job — no rebuild
 
@@ -338,7 +342,7 @@ kronos/
 │   ├── config/                 kronos.yml
 │   ├── scheduler/              cron, startup, daemons, watches, catch-up, timeouts, alerts
 │   ├── job/                    Register(), Ctx, logger, dry-run diff  ← the plug-in API
-│   ├── jobs/                   built-in jobs, one file each (+ assets/health.css for the health page)
+│   ├── jobs/                   built-in jobs: <name>.go + <name>_test.go each (+ assets/health.css)
 │   ├── store/                  YAML records, atomic writes, Python-compatible formatting
 │   ├── dates/                  date parsing and repeat rules
 │   ├── outbox/                 Telegram hand-off (outbox folder)

@@ -207,7 +207,9 @@ A subscription is drafted when its `sub-…` event (created by `subscription_upd
 
 ## 8. Adding a job
 
-Go: `internal/jobs/<name>.go` with `func init() { job.Register("<name>", fn) }` + a `jobs:` entry with the same name + rebuild. Script: file in `./scripts` + `command:` entry + restart. Template: `archive_rollover.go`. Use `c.Path`, `c.Int/String/…` for options, `c.WriteFile/Move/Remove/AppendFile/MkdirAll` (dry-run aware), `c.Notify` for Telegram, `store.*` for YAML, `dates.*` for dates, pass `c` as the context to network calls. Return an error to FAIL + alert; log `Skip` and return nil for "nothing to do". `TestEveryBuiltInJobIsRegistered` lists the built-ins — update it.
+Go: `internal/jobs/<name>.go` with `func init() { job.Register("<name>", fn) }` + a `jobs:` entry with the same name + rebuild. Script: file in `./scripts` + `command:` entry + restart. Template: `archive_rollover.go`. Use `c.Path`, `c.Int/String/…` for options, `c.WriteFile/Move/Remove/AppendFile/MkdirAll` (dry-run aware), `c.Notify` for Telegram, `store.*` for YAML, `dates.*` for dates, pass `c` as the context to network calls. Return an error to FAIL + alert; log `Skip` and return nil for "nothing to do". Tests go in `<name>_test.go` (shared helpers: `jobs_test.go`). The job must also appear in `kronos.yml.example` — `registry_test.go` checks registered jobs against it.
+
+Remove a job: delete `<name>.go` + `<name>_test.go` and its `kronos.yml.example` / `kronos.yml` entries; a job-only path in `config.defaultPaths` can go too. Nothing else references a job by name.
 
 ---
 
@@ -234,7 +236,7 @@ Go: `internal/jobs/<name>.go` with `func init() { job.Register("<name>", fn) }` 
 
 ## 10. Tests
 
-`go test ./...` (also in `docker build`): dates (Python-equal rules, anchor), store (error messages, round-trip order, PyStr/PyFloat/escape, UniquePath), outbox (contract), jobs (anchor drift, no anchor for ordinary days, legacy normalisation, broken file never overwritten, dry run writes nothing, missed-day subscription event + idempotency, New Year birthdays, partial agenda, registry), scheduler (ok/fail/panic/timeout, command env/exit/stderr/timeout, bad jobs skipped + alerted, catch-up order and rules, Prev, watch debounce).
+`go test ./...` (also in `docker build`): dates (Python-equal rules, anchor), store (error messages, round-trip order, PyStr/PyFloat/escape, UniquePath), outbox (contract), jobs (anchor drift, no anchor for ordinary days, legacy normalisation, broken file never overwritten, dry run writes nothing, missed-day subscription event + idempotency, New Year birthdays, partial agenda, arthik drafts window/dedupe/prune, registry = kronos.yml.example), scheduler (ok/fail/panic/timeout, command env/exit/stderr/timeout, bad jobs skipped + alerted, catch-up order and rules, Prev, watch debounce).
 
 ---
 
