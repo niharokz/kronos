@@ -1,0 +1,118 @@
+# kronos.yml — what Kronos runs and when. Copy to kronos.yml (gitignored).
+# Changes take effect on restart: docker compose restart kronos
+#
+# ── Adding a job ────────────────────────────────────────────────────────
+# Go job:     add internal/jobs/<name>.go (register "<name>"), add an entry
+#             below with the same name, then rebuild (docker compose up -d --build).
+# Script job: put a script in ./scripts, add an entry with command:, restart.
+#             No rebuild needed.
+#
+# ── Per-job fields ──────────────────────────────────────────────────────
+#   schedule:    "m h dom mon dow" (5-field cron, container local time)
+#                | @startup (each start) | @daemon (kept running) | @manual (kronos run only)
+#   description: shown in logs and `kronos list`
+#   enabled:     false to switch a job off without deleting it
+#   timeout:     seconds before the run is abandoned/killed (default settings.timeout_seconds)
+#   catch_up:    false to NOT run a missed slot after downtime (default true)
+#   watch:       [files] — also run ~10–20 s after any of them changes
+#   command:     [program, args...] — run this instead of a built-in Go job
+#   options:     job-specific settings (see each job's file)
+
+paths:
+  logs: /data/notes/logs/kronos                  # kronos_YYYYMM.log
+  state: /data/notes/logs/kronos/state.json      # last run per job (catch-up, health)
+  outbox: /data/notes/data/outbox                # Omnimo sends from here (its outbox.dir)
+  events: /data/notes/data/event.md              # shared with Omnimo and Natlas
+  event_backup: /data/notes/data/event.md.bck
+  subscriptions: /data/notes/data/subscription.md
+  birthdays: /data/notes/data/birthdays.md
+  health: /data/notes/data/health.md
+  inbox: /data/notes/inbox
+  archive: /data/notes/archive
+  daily: /data/notes/inbox/daily.md
+  finance_inbox: /data/notes/data/finance/inbox  # Arthik's inbox: Kronos writes kronos.md, reads drafts.md
+  health_site: /docker/web/health
+  google_token: /app/config/token.json
+  # Every path is also given to command jobs as KRONOS_<NAME> (e.g. KRONOS_EVENTS).
+
+settings:
+  tick_seconds: 10            # how often the scheduler checks for due jobs
+  timeout_seconds: 900        # default per-job timeout
+  catch_up_hours: 48          # a slot missed within this window runs once on start
+  alerts: true                # failures → Telegram via Omnimo
+
+jobs:
+
+  # Telegram notice with host uptime + RAM when Kronos starts
+  restarted:
+    schedule: "@startup"
+    description: "Kronos started notice."
+
+  # Merge untitled inbox files into note.md
+  untitled_import:
+    schedule: "0 2 * * *"
+    description: "Merge untitled inbox notes into note.md."
+    # options: { note_file: note.md }
+
+  # Archive inbox files older than 30 days
+  inbox_archive:
+    schedule: "5 2 * * *"
+    description: "Move inbox files older than 30 days to archive."
+    # options: { archive_after_days: 30, exclude: [note.md, guide.md] }
+
+  # Advance overdue subscription due dates, create due-today events, sort
+  subscription_update:
+    schedule: "10 2 * * *"
+    description: "Update subscription due dates and sort subscriptions."
+
+  # Subscriptions that fell due → drafts in Arthik's inbox (runs after subscription_update)
+  arthik_subscriptions:
+    schedule: "12 2 * * *"
+    description: "Hand due subscriptions to Arthik as drafts."
+    # options: { max_catch_up_days: 3, keep_days: 60 }
+
+  # Move closed one-time events older than 30 days to backup
+  event_archive:
+    schedule: "15 2 * * *"
+    description: "Move closed one-time events older than 30 days to event.md.bck."
+    # options: { archive_after_days: 30 }
+
+  # Sync Google Contacts birthdays to birthdays.md (weekly, Monday)
+  birthday_sync:
+    schedule: "20 2 * * 1"
+    description: "Sync birthdays from Google Contacts to birthdays.md."
+
+  # Advance overdue events, reopen recurring, purge old closed, sort
+  event_update:
+    schedule: "30 2 * * *"
+    description: "Update recurring events, overdue events, sorting and closed items."
+    # options: { purge_after_days: 365 }
+
+  # Regenerate the health site — nightly, and within seconds of a health.md edit
+  health_website:
+    schedule: "45 2 * * *"
+    description: "Create Health Website."
+    watch: [/data/notes/data/health.md]
+
+  # Generate daily agenda
+  daily_update:
+    schedule: "0 3 * * *"
+    description: "Generate daily agenda."
+    # options: { upcoming_days: 7 }
+
+  # Roll archive files into previous year's folder (1 January)
+  archive_rollover:
+    schedule: "30 3 1 1 *"
+    description: "Move archive files into previous year's folder."
+
+  # Morning briefing: agenda goes to Omnimo, which adds Nimo's commentary
+  nimo_briefing:
+    schedule: "40 5 * * *"
+    description: "Queue daily agenda as an Omnimo briefing."
+
+
+  # ── Example script job (no rebuild needed) ──
+  # disk_check:
+  #   schedule: "0 4 * * *"
+  #   description: "Warn when the disk is over 90% full."
+  #   command: ["sh", "/app/scripts/disk_check.sh"]

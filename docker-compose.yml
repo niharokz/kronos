@@ -5,6 +5,7 @@ services:
       context: .
       args:
         VERSION: "1.0.0"
+    image: kronos:1.0.0
     container_name: kronos
     restart: unless-stopped
     init: true                                      # proper PID 1 for script jobs (signals, zombie reaping)
@@ -20,8 +21,16 @@ services:
       - ./config:/app/config                        # kronos.yml paths.google_token (rewritten on refresh)
       - ./scripts:/app/scripts:ro                   # script jobs (command:) — no rebuild needed
 
+    # Least privilege: immutable image filesystem, no Linux capabilities, no privilege gain.
+    # Kronos writes only to the mounts above; scripts get a small scratch /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 256m
     stop_grace_period: 1m                           # a running job finishes before the container stops
 
     logging:

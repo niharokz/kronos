@@ -1,7 +1,7 @@
 # Kronos — Architecture (internal)
 
 > Internal reference for the Nimory homelab. Share this file (plus only the files being changed) instead of the full source.
-> Contains no secret values — only names and paths. Last reviewed: 2026-10-05 (v1.0.0, replaces Taskmaster).
+> Contains no secret values — only names and paths. Last reviewed: 2026-10-10 (v1.0.0, replaces Taskmaster).
 
 ---
 
@@ -25,18 +25,20 @@ Host: a small Debian box with Docker Compose. Repo: `gitlab.com/niharokz/kronos`
 
 | Item | Value |
 |---|---|
-| Image | multi-stage: `golang:1.23-alpine` build (runs `go test ./...`) → `alpine:3.20` + `ca-certificates`; static binary `/app/kronos` (~7 MB), on `PATH` |
+| Image | multi-stage: `golang:1.23-alpine` build (runs `go vet` + `go test`) → `alpine:3.20` + `ca-certificates`; static binary `/app/kronos` (~7 MB), on `PATH` |
 | Command | `kronos serve` |
-| User | `.env` `PUID:PGID` (default 1000:1000), `init: true`, `no-new-privileges`, `stop_grace_period: 1m` |
+| User / hardening | `.env` `PUID:PGID` (image default `USER 1000:1000`), `init: true`, `read_only: true` + tmpfs `/tmp` (16 MB), `cap_drop: [ALL]`, `no-new-privileges`, `pids_limit: 256`, `mem_limit: 256m`, `stop_grace_period: 1m` |
 | TZ | `.env` `TZ` (default UTC); zone data is compiled in (`time/tzdata`), so it works on minimal images |
 | Volumes | `$NOTE_PATH → /data/notes` · `$WEB_PATH → /docker/web` · `./kronos.yml → /app/kronos.yml:ro` · `./config → /app/config` (rw: token refresh) · `./scripts → /app/scripts:ro` |
 | Network | default bridge (only `people.googleapis.com` / `oauth2.googleapis.com` outbound); no ports |
-| Secrets / host values | `.env` (gitignored, template `.env.example`): `NOTE_PATH`, `WEB_PATH`, `PUID`, `PGID`, `TZ` — used only by compose, not passed into the container. Google OAuth in `./config/token.json` (+ `credentials.json`, only for regenerating) |
-| Ignored | `.gitignore`: `.env*` (except `.env.example`), `kronos.yml`, `config/*`, `scripts/*` (except `*.example`), build output, editor/OS files · `.dockerignore`: the same secrets + `.git`, docs |
+| Secrets / host values | `.env` (gitignored, template `.env.example`): `DATA_PATH` (base), `NOTE_PATH` (`${DATA_PATH}/notes`), `WEB_PATH`, `PUID`, `PGID`, `TZ` — used only by compose, not passed into the container. Google OAuth in `./config/token.json` (+ `credentials.json`, only for regenerating) |
+| Ignored | `.gitignore`: `.env*` (except `.env.example`), `kronos.yml`, `config/*`, `scripts/*` (except `*.example`), `**/token.json`, `**/credentials.json`, `**/client_secret*.json`, build output, editor/OS files · `.dockerignore`: the same secrets + `.git`, CI file, docs |
 | Logs | stdout (json-file 10 MB × 3) + `/data/notes/logs/kronos/kronos_YYYYMM.log` |
 | State | `/data/notes/logs/kronos/state.json` |
 
 Rebuild after code changes (`docker compose up -d --build`); restart after `kronos.yml` changes; nothing needed after adding a script.
+
+CI (`.gitlab-ci.yml`): `gofmt -l` must be empty, `go mod verify`, `go vet`, `go test`, build. Config parsing rejects unknown keys at the top level, under `settings:` and inside a job (`paths:` and `options:` stay free-form).
 
 ---
 
@@ -47,7 +49,7 @@ cmd/kronos/main.go       CLI: serve | run <job> [--dry-run] | list | next [n] | 
 internal/config/         kronos.yml → Config{Paths, Settings, Jobs(ordered)}; default paths; Job.Int/String/Bool/Strings(options)
 internal/scheduler/      scheduler.go: kinds, queue, catch-up, watches, daemons · run.go: Execute (timeout, panic), command jobs, Alert
 internal/job/            Register/Lookup/Names, Ctx (paths, options, file ops, Notify, DryRun), Logger, Diff
-internal/jobs/           one file per job + helpers.go + assets/ (health template, sw.js, icon — verbatim from Python)
+internal/jobs/           one file per job + helpers.go + assets/health.css (nss stylesheet, verbatim from health_website.py)
 internal/store/          YAML as yaml.Node records: LoadMapping/LoadRecords/RecordList/RecordsYAML/Encode, Get/Set/Delete,
                          DateOf/IntOf/Field/Equals/Truthy; PyStr/PyRepr/PyFloat/PyHTMLEscape; AtomicWrite(Perm), UniquePath
 internal/dates/          ParseISO/ParseTimestamp, AddMonths/AddYears (anchor), ParseRule/Advance/RollForward, AnchorDay
@@ -87,10 +89,11 @@ Dependencies: `gopkg.in/yaml.v3` (via its GitHub mirror — `replace` in go.mod,
 | 02:00 | `untitled_import` | `inbox/*untitled*` | `inbox/note.md` (append), deletes sources | `note_file` (note.md) |
 | 02:05 | `inbox_archive` | `inbox/*` by mtime | `archive/` via `UniquePath` | `archive_after_days` (30), `exclude` ([note.md, guide.md]) |
 | 02:10 | `subscription_update` | `subscription.md`, `event.md` | both | — |
+| 02:12 | `arthik_subscriptions` | `subscription.md`, `event.md`, `data/finance/inbox/kronos.md` | `data/finance/inbox/kronos.md` (only Kronos writes it) | `max_catch_up_days` (3), `keep_days` (60) |
 | 02:15 | `event_archive` | `event.md`, `event.md.bck` | backup first, then `event.md` | `archive_after_days` (30) |
 | 02:20 Mon | `birthday_sync` | People API, `config/token.json` | `birthdays.md` (+ token on refresh, 0600) | — |
 | 02:30 | `event_update` | `event.md` | `event.md` | `purge_after_days` (365) |
-| 02:45 + watch | `health_website` | `health.md` | `<paths.health_site>/{index.html,manifest.json,sw.js,icon.svg}` | — |
+| 02:45 + watch | `health_website` | `health.md` | `<paths.health_site>/index.html` | — |
 | 03:00 | `daily_update` | events, subscriptions, birthdays | `inbox/daily.md` | `upcoming_days` (7) |
 | 03:30 1 Jan | `archive_rollover` | `archive/*` | `archive/<year-1>/` | — |
 | 05:40 | `nimo_briefing` | `inbox/daily.md` | outbox briefing | — |
@@ -164,7 +167,33 @@ people:
 `# Overdue` / `# Due Today` / `# Upcoming` (7 d), each sorted, sections separated by a blank line. Prefixes `EVENT:` · `SUBSCRIPTION-` · `BIRTHDAY-`. Pending events are always overdue. Due-today subscriptions appear only via their auto event. Birthdays wrap New Year; impossible dates → 28 Feb. Broken source → agenda written anyway, then FAIL (`Agenda incomplete – unreadable: <files>`).
 
 ### `health.md` → health site
-`meta` (title, tagline, subtitle, footer, last_updated, weight, height, bmi?, body_fat) · `runs.planned[]` / `runs.recent[]` (name, date, link?, any keys → label/value, `reward` highlighted) · `gym[]` (day, title, exercises[], full_width?). Output byte-identical to the Python version (manifest JSON `ensure_ascii` style included), except the install button label (see §9).
+`meta` (title, tagline, subtitle, footer, last_updated, weight, height, bmi?, body_fat) · `runs.planned[]` / `runs.recent[]` (name, date, link?, any keys → label/value, `reward` highlighted) · `gym[]` (day, title, exercises[], full_width?).
+
+Since 2026-10-10 the page uses the **nss theme** (port of the nss-edition `health_website.py`): one `index.html`, classless and JavaScript-free, inline SVG favicon, stylesheet from `assets/health.css`. Computed extras: stats strip (races, total km, best 10K, money spent, weight/height/BMI/body fat), pace after `time` when `distance` parses, countdown on planned runs, runs sorted by date (planned soonest first, recent newest first, unparseable dates last). Dates accepted: unquoted YAML dates, `25 Oct 2026`, `25 October 2026`, `2026-10-25`, `25-10-2026`. Times should be quoted (`'52:00'`): PyYAML reads unquoted `52:00` as a base-60 number, Kronos as text. Output was verified byte-identical to the Python script on the real `health.md` and an edge-case fixture. The old PWA files (`manifest.json`, `sw.js`, `icon.svg`) are no longer written.
+
+---
+
+### Arthik inbox (`data/finance/inbox/`)
+
+Kronos is one of Arthik's producers. `arthik_subscriptions` writes `kronos.md`; nothing else writes that file, and Arthik only reads it:
+
+```yaml
+updated: <ts>
+
+last_run: '<YYYY-MM-DD>'               # days after this are checked on the next run
+drafts:
+  - id: sub-<slug(name)>-<YYYY-MM-DD>   # = the due event's id: stable, so nothing is drafted twice
+    source: subscription
+    date: '<YYYY-MM-DD>'
+    title: <subscription name>
+    type: expense
+    amount: <as in subscription.md>
+    account: <as in subscription.md, free text; Arthik maps it>
+    category: <as in subscription.md, free text; Arthik maps it>
+    notes: Subscription · <cycle>
+```
+
+A subscription is drafted when its `sub-…` event (created by `subscription_update`) is dated after the previous run (`last_run`, stored in `kronos.md`) and up to today, or when its `next_due_date` is today. The first run looks at today only, and a catch-up never goes back more than `max_catch_up_days`, so old due events (bills already handled, or from before the job existed) are never drafted. Drafts older than `keep_days` are dropped (Arthik keeps its own record in `drafts.md`). An empty list is written as `drafts: []`.
 
 ---
 
@@ -195,7 +224,7 @@ Go: `internal/jobs/<name>.go` with `func init() { job.Register("<name>", fn) }` 
 | Alerts | "Exited with code 1" | the real error message |
 | Schedule | 01:10–03:10 | 02:00–03:30 (+ briefing 05:40) |
 | YAML formatting | PyYAML re-quoted everything, dropped comments | original quoting/comments kept, 2-space indent; content identical |
-| Health page | install button showed literal `⬇️` (raw-string bug) | shows ⬇️ |
+| Health page | 6-theme PWA (manifest, service worker, icon) | single nss-theme page, classless, no JS (since 2026-10-10) |
 | Logs | `logs/taskmaster/task_YYYYMM.log` | `logs/kronos/kronos_YYYYMM.log` |
 | New | — | `@manual`, `watch:`, `command:` jobs, `options:`, `--dry-run`, `list/next/health/notify` |
 

@@ -65,6 +65,7 @@ var defaultPaths = map[string]string{
 	"inbox":         "/data/notes/inbox",
 	"archive":       "/data/notes/archive",
 	"daily":         "/data/notes/inbox/daily.md",
+	"finance_inbox": "/data/notes/data/finance/inbox",
 	"health_site":   "/docker/web/health",
 	"google_token":  "/app/config/token.json",
 }
@@ -95,6 +96,9 @@ func Parse(raw []byte, file string) (*Config, error) {
 	}
 	if err := yaml.Unmarshal(raw, &top); err != nil {
 		return nil, fmt.Errorf("config %s: %v", file, err)
+	}
+	if err := checkKeys(raw, file); err != nil { // catch typos like "schedul:" instead of silently ignoring them
+		return nil, err
 	}
 
 	cfg := &Config{
@@ -148,6 +152,65 @@ func Parse(raw []byte, file string) (*Config, error) {
 		cfg.Jobs = append(cfg.Jobs, j)
 	}
 	return cfg, nil
+}
+
+// Allowed keys at each level of kronos.yml. paths: and options: are free-form
+// (extra paths are passed to script jobs as KRONOS_<NAME>).
+var (
+	topKeys      = keySet("paths", "settings", "jobs")
+	settingsKeys = keySet("tick_seconds", "timeout_seconds", "catch_up_hours", "alerts")
+	jobKeys      = keySet("schedule", "description", "enabled", "timeout", "catch_up", "watch", "command", "options")
+)
+
+func keySet(keys ...string) map[string]bool {
+	m := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		m[k] = true
+	}
+	return m
+}
+
+// checkKeys rejects unknown keys at the top level, under settings: and in
+// each job, so a misspelt key fails loudly instead of being ignored.
+func checkKeys(raw []byte, file string) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil || len(doc.Content) == 0 {
+		return nil // empty file or already reported by the caller
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return fmt.Errorf("config %s: top level must be a mapping (paths, settings, jobs)", file)
+	}
+	if err := unknownKey(root, topKeys, file, "top level"); err != nil {
+		return err
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key, val := root.Content[i].Value, root.Content[i+1]
+		switch {
+		case key == "settings" && val.Kind == yaml.MappingNode:
+			if err := unknownKey(val, settingsKeys, file, "settings"); err != nil {
+				return err
+			}
+		case key == "jobs" && val.Kind == yaml.MappingNode:
+			for j := 0; j+1 < len(val.Content); j += 2 {
+				if body := val.Content[j+1]; body.Kind == yaml.MappingNode {
+					if err := unknownKey(body, jobKeys, file, fmt.Sprintf("job %q", val.Content[j].Value)); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func unknownKey(m *yaml.Node, allowed map[string]bool, file, where string) error {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if k := m.Content[i]; !allowed[k.Value] {
+			return fmt.Errorf("config %s: line %d: unknown key %q in %s", file, k.Line, k.Value, where)
+		}
+	}
+	return nil
 }
 
 // Job returns the named job's config.

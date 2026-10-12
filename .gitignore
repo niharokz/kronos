@@ -1,10 +1,28 @@
-# Personal config and secrets — never committed
+# ── Secrets and personal config (never committed) ───────────────────────
+.env
+.env.*
+!.env.example
 kronos.yml
 config/*
 !config/.gitkeep
 scripts/*
-!scripts/disk_check.sh.example
-.env
+!scripts/*.example
+# OAuth files, wherever they end up
+**/token.json
+**/credentials.json
+**/client_secret*.json
 
-# Build output
+# ── Build and test output ───────────────────────────────────────────────
 /kronos
+*.exe
+*.test
+*.out
+coverage.*
+
+# ── Editor and OS clutter ───────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db

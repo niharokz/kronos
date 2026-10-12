@@ -193,7 +193,7 @@ func TestAgendaPartialFailureStillWrites(t *testing.T) {
 }
 
 func TestEveryBuiltInJobIsRegistered(t *testing.T) {
-	want := []string{"archive_rollover", "birthday_sync", "daily_update", "event_archive", "event_update",
+	want := []string{"archive_rollover", "arthik_subscriptions", "birthday_sync", "daily_update", "event_archive", "event_update",
 		"health_website", "inbox_archive", "nimo_briefing", "restarted", "subscription_update", "untitled_import"}
 	got := strings.Join(job.Names(), ",")
 	if got != strings.Join(want, ",") {

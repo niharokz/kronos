@@ -1,0 +1,2 @@
+# Keep Unix line endings in the repo, even when committed from Windows
+* text=auto eol=lf

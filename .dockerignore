@@ -1,6 +1,14 @@
+# Keep secrets, personal config and repo clutter out of the build context
 .git
+.gitlab-ci.yml
+.env
+.env.*
 kronos.yml
 config/
 scripts/
-.env
+**/token.json
+**/credentials.json
+**/client_secret*.json
 *.md
+.idea/
+.vscode/

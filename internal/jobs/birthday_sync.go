@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -117,7 +118,11 @@ func accessToken(c *job.Ctx, client *http.Client, path string) (string, error) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Token refresh failed: HTTP %d: %s", resp.StatusCode, snippet(body))
+		hint := ""
+		if strings.Contains(string(body), "invalid_grant") { // revoked, or expired (OAuth app still in Testing mode)
+			hint = " – refresh token no longer valid: regenerate " + filepath.Base(path) + " (see README, Google OAuth)"
+		}
+		return "", fmt.Errorf("Token refresh failed: HTTP %d: %s%s", resp.StatusCode, snippet(body), hint)
 	}
 	var r struct {
 		AccessToken string `json:"access_token"`

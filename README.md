@@ -57,10 +57,11 @@ Any job can also have `watch: [files]`: it then runs again ~10–20 s after one 
 | `untitled_import` | daily 02:00 | Appends every `*untitled*` inbox file to `note.md` under a dated heading, then deletes the original. |
 | `inbox_archive` | daily 02:05 | Moves inbox files not modified for 30 days to the archive, never overwriting (`todo.md` → `todo_1.md`). |
 | `subscription_update` | daily 02:10 | Rolls overdue due dates forward by their cycle; a subscription due **today** gets a one-time `pending` event. |
+| `arthik_subscriptions` | daily 02:12 | Subscriptions that fall due (since its last run, so never old ones) become drafts in Arthik's inbox (`data/finance/inbox/kronos.md`), to accept or reject in Arthik. |
 | `event_archive` | daily 02:15 | Moves closed one-time events older than 30 days into a backup file. |
 | `birthday_sync` | Mondays 02:20 | Pulls birthdays from Google Contacts (People API, read-only). |
 | `event_update` | daily 02:30 | Overdue one-time events → today as `pending`; overdue recurring → next date; closed recurring → reopened at next date; sorts. |
-| `health_website` | daily 02:45 + on edit | Renders `health.md` into a static, installable PWA with six themes. |
+| `health_website` | daily 02:45 + on edit | Renders `health.md` into one static page in the nss look: classless, no JavaScript, dark/light by system. Adds a stats strip, pace per run and countdowns. |
 | `daily_update` | daily 03:00 | Writes the agenda: **Overdue**, **Due Today**, **Upcoming (7 days)**. |
 | `archive_rollover` | 1 Jan 03:30 | Moves loose archive files into a folder named after the previous year. |
 | `nimo_briefing` | daily 05:40 | Sends the agenda as a *briefing* — the bot posts it and adds an AI commentary. |
@@ -119,27 +120,30 @@ people:
 ```yaml
 meta:
   title: Health Diary
-  tagline: RUN • GYM • PROGRESS
-  subtitle: Personal training log
+  subtitle: Run • Lift • Improve
+  tagline: Version 1 in progress     # optional second line under the title
   footer: Keep moving
   last_updated: 03 Oct 2026
   weight: 72kg
   height: 175cm
-  body_fat: 18                  # BMI is calculated when not given
+  body_fat: 18                       # BMI is calculated when not given
 runs:
   planned:
     - name: City 10K
-      date: 2026-11-10
-      link: https://example.com # makes the title clickable
-      distance: 10K             # any other key is shown as a label/value pair
+      date: 25 Oct 2026              # also 2026-10-25 or 25-10-2026; planned runs get a countdown
+      distance: 10K
+      link: example.com/race  bib 42 # makes the title clickable; text after the URL shows as "ref"
   recent:
     - name: Sunday long run
-      date: 2026-09-28
-      reward: Medal             # 'reward' is highlighted
+      date: 28 Sep 2026
+      distance: 10K
+      time: '58:30'                  # quote it; with distance gives pace /km
+      cost: 900                      # 0 shows "Free"; summed in the stats strip
+      reward: Medal                  # highlighted; any other key shows as a label/value pair
 gym:
-  - day: Mon
+  - day: DAY 1
     title: Push
-    exercises: [Bench press, Overhead press, Dips]
+    exercises: [DB Bench Press 4x10, Dips]   # "4x10"-style sets are shown on the right
     full_width: false
 ```
 
@@ -159,12 +163,13 @@ gym:
 
    | Variable | Meaning |
    |---|---|
-   | `NOTE_PATH` | Host folder of the notes vault → mounted at `/data/notes` |
+   | `DATA_PATH` | Base data folder on the host (only used to build the paths below) |
+   | `NOTE_PATH` | Host folder of the notes vault, e.g. `${DATA_PATH}/notes` → mounted at `/data/notes` |
    | `WEB_PATH` | Host folder the health site is published under → mounted at `/docker/web` |
    | `PUID`, `PGID` | Owner of the files Kronos writes (`id -u`, `id -g`) |
    | `TZ` | Time zone for the cron schedules |
 
-   Nothing host-specific lives in the repo: `docker-compose.yml` only references these variables, and `kronos.yml` uses container paths.
+   Nothing host-specific lives in the repo: `docker-compose.yml` only references these variables, and `kronos.yml` uses container paths. Compose refuses to start if `NOTE_PATH` or `WEB_PATH` is unset. The host folders must be writable by `PUID:PGID`.
 
 3. **Telegram (optional).** Kronos writes messages into `paths.outbox`; a bot that reads that folder sends them. With Omnimo, set its `outbox.dir` to the same folder. Without a bot, messages simply stay in the folder.
 
@@ -178,8 +183,8 @@ gym:
    open("token.json", "w").write(flow.run_local_server(port=0).to_json())
    ```
 
-   Put `token.json` in `./config/` (writable by the container user). Kronos refreshes it automatically.
-   > In *Testing* mode Google expires refresh tokens after 7 days — publish the app (it can stay unverified) to keep it valid.
+   Put `token.json` in `./config/` (writable by the container user). Kronos refreshes it automatically. Keep `credentials.json` and `token.json` out of git — both are ignored.
+   > In *Testing* mode Google expires refresh tokens after 7 days — publish the app (it can stay unverified) to keep it valid. A log line with `invalid_grant` means the token must be regenerated.
 
 5. **Run**
 
@@ -318,7 +323,9 @@ Levels: `START INFO OK SKIP WARN FAIL DAEMN`. Every `FAIL` is also queued as a T
 - **Never write an empty list**, and **never treat an unreadable file as empty**.
 - **Deterministic IDs** for anything auto-created, so reruns never duplicate.
 - **Copy before remove** — destination first, then source: a crash can duplicate, never lose.
-- **No secrets in the repo or the image** — `kronos.yml`, `config/` and `scripts/` are gitignored and dockerignored.
+- **No secrets in the repo or the image** — `.env`, `kronos.yml`, `config/`, `scripts/` and any OAuth JSON are gitignored and dockerignored.
+- **Least privilege** — non-root user, read-only image filesystem, all Linux capabilities dropped, `no-new-privileges`, no open ports.
+- **Strict config** — an unknown key in `kronos.yml` (top level, `settings:` or a job) is an error, so typos never pass silently.
 
 ---
 
@@ -331,7 +338,7 @@ kronos/
 │   ├── config/                 kronos.yml
 │   ├── scheduler/              cron, startup, daemons, watches, catch-up, timeouts, alerts
 │   ├── job/                    Register(), Ctx, logger, dry-run diff  ← the plug-in API
-│   ├── jobs/                   built-in jobs, one file each (+ assets/ for the health page)
+│   ├── jobs/                   built-in jobs, one file each (+ assets/health.css for the health page)
 │   ├── store/                  YAML records, atomic writes, Python-compatible formatting
 │   ├── dates/                  date parsing and repeat rules
 │   ├── outbox/                 Telegram hand-off (outbox folder)
@@ -341,7 +348,14 @@ kronos/
 ├── kronos.yml.example
 ├── Dockerfile
 ├── docker-compose.yml          host values from .env
-└── .env.example
+├── .env.example
+└── LICENSE                     MIT
 ```
 
 Tests: `go test ./...` (also run during `docker build`).
+
+---
+
+## License
+
+[MIT](LICENSE) © 2026 niharokz

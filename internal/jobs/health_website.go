@@ -1,40 +1,54 @@
 package jobs
 
 import (
-	"bytes"
 	_ "embed"
-	"encoding/json"
 	"fmt"
+	"math"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
-	"unicode/utf8"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"gitlab.com/niharokz/kronos/internal/dates"
 	"gitlab.com/niharokz/kronos/internal/job"
 	"gitlab.com/niharokz/kronos/internal/store"
 )
 
-// health_website renders health.md into the static health diary PWA in
-// paths.health_site: index.html, manifest.json, sw.js, icon.svg.
+// health_website renders health.md into the health diary page
+// (paths.health_site/index.html) in the "nss" look: teal accent,
+// square-grid background, dark by default and light by system setting;
+// classless (bare semantic tags), no JavaScript, no tracking, no external
+// fonts or CDNs.
 //
-// The page template, service worker and icon in assets/ were extracted
-// verbatim from Taskmaster's health_website.py, and the rendering below
-// follows it line for line, so the output is the same page.
+// A line-for-line port of health_website.py (nss edition). Computed extras
+// come from data already in health.md: a stats strip (races, distance, best
+// 10K, money spent, BMI), pace per run (time ÷ distance) and a countdown on
+// planned runs.
 
 func init() { job.Register("health_website", healthWebsite) }
 
-var (
-	//go:embed assets/health_template.html
-	healthTemplate string
-	//go:embed assets/health_sw.js
-	healthServiceWorker string
-	//go:embed assets/health_icon.svg
-	healthIcon string
-)
+//go:embed assets/health.css
+var healthCSS string // the nss stylesheet: tokens + element selectors only
 
 const dash = "—" // shown for missing values
+
+// Run fields never shown as label/value rows (handled elsewhere or internal).
+var skipFields = map[string]bool{"id": true, "name": true, "link": true, "date": true}
+
+const healthLogo = `<svg viewBox="0 0 48 48" width="44" height="44" aria-hidden="true">
+        <rect width="48" height="48" rx="10" fill="#3a807a"/>
+        <polyline points="8,26 16,26 20,15 27,34 31,21 35,26 40,26" fill="none" stroke="#fff"
+                  stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>`
+
+const healthFaviconSVG = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'>" +
+	"<rect width='48' height='48' rx='10' fill='#3a807a'/>" +
+	"<polyline points='8,26 16,26 20,15 27,34 31,21 35,26 40,26' fill='none' " +
+	"stroke='#fff' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'/></svg>"
 
 func healthWebsite(c *job.Ctx) error {
 	path := c.Path("health") // kronos.yml: paths.health
@@ -46,18 +60,8 @@ func healthWebsite(c *job.Ctx) error {
 		return fmt.Errorf("%s is empty", filepath.Base(path))
 	}
 
-	meta := store.Get(data, "meta")
-	if meta == nil || meta.Kind != yaml.MappingNode {
-		c.Log.Warn("'meta' block missing or malformed, using defaults")
-		meta = store.NewMapping()
-	}
-	runs := store.Get(data, "runs")
-	if !store.Truthy(runs) {
-		runs = store.NewMapping()
-	} else if runs.Kind != yaml.MappingNode {
-		c.Log.Warn("'runs' block malformed, ignoring")
-		runs = store.NewMapping()
-	}
+	meta := mappingOr(c, store.Get(data, "meta"), "meta")
+	runs := mappingOr(c, store.Get(data, "runs"), "runs")
 
 	planned := validRuns(c, store.Get(runs, "planned"), "planned")
 	recent := validRuns(c, store.Get(runs, "recent"), "recent")
@@ -68,29 +72,32 @@ func healthWebsite(c *job.Ctx) error {
 		}
 	}
 
-	page := renderHealthPage(c, meta, planned, recent, gym)
-	manifest, err := healthManifest(meta)
-	if err != nil {
-		return err
-	}
+	page := renderHealthPage(c.Today, meta, planned, recent, gym)
 
 	out := c.Path("health_site") // kronos.yml: paths.health_site (under .env WEB_PATH)
 	if err := c.MkdirAll(out); err != nil {
 		return err
 	}
-	for name, content := range map[string]string{
-		"index.html":    page,
-		"manifest.json": manifest,
-		"sw.js":         healthServiceWorker,
-		"icon.svg":      healthIcon,
-	} {
-		if err := c.WriteFile(filepath.Join(out, name), []byte(content)); err != nil {
-			return err
-		}
+	if err := c.WriteFile(filepath.Join(out, "index.html"), []byte(page)); err != nil {
+		return err
 	}
-
 	c.Log.OK("Health site written to %s (planned=%d, recent=%d, gym=%d)", out, len(planned), len(recent), len(gym))
 	return nil
+}
+
+// ── Loading and validation ──────────────────────────────────────────────
+
+// mappingOr returns n when it is a mapping; a missing value or a
+// malformed one becomes an empty mapping (the latter with a warning).
+func mappingOr(c *job.Ctx, n *yaml.Node, name string) *yaml.Node {
+	switch {
+	case !store.Truthy(n):
+		return store.NewMapping()
+	case n.Kind != yaml.MappingNode:
+		c.Log.Warn("'%s' block malformed, ignoring", name)
+		return store.NewMapping()
+	}
+	return n
 }
 
 // items returns the entries of a list value (Python iterates `x or []`).
@@ -116,9 +123,7 @@ func validRuns(c *job.Ctx, list *yaml.Node, kind string) []*yaml.Node {
 				store.Set(r, field, store.Str(dash))
 			}
 		}
-		if len(r.Content) > 0 {
-			out = append(out, r)
-		}
+		out = append(out, r)
 	}
 	return out
 }
@@ -137,246 +142,441 @@ func validGymDay(c *job.Ctx, d *yaml.Node) *yaml.Node {
 	if ex := store.Get(d, "exercises"); ex == nil || ex.Kind != yaml.SequenceNode {
 		store.Set(d, "exercises", store.Seq())
 	}
-	if len(d.Content) == 0 {
-		return nil
-	}
 	return d
 }
 
-// ── Rendering (same markup as the Python version) ───────────────────────
+// ── Value helpers (YAML can give str, int, float, date, null) ───────────
 
-// esc is html.escape(str(value)), with "—" for a missing value or "".
-func esc(n *yaml.Node) string {
+// htext is the plain display text: null → "", 2500.0 → "2500", lists
+// joined with ", ", strings trimmed.
+func htext(n *yaml.Node) string {
 	n = store.Resolve(n)
-	if store.IsNull(n) || (n.Kind == yaml.ScalarNode && n.ShortTag() == "!!str" && n.Value == "") {
-		return dash
-	}
-	return store.PyHTMLEscape(store.PyStr(n))
-}
-
-// escStr is esc for a Go string.
-func escStr(s string) string {
-	if s == "" {
-		return dash
-	}
-	return store.PyHTMLEscape(s)
-}
-
-// sval is str(d.get(key) or "").strip() — "" for missing/null.
-func sval(m *yaml.Node, key string) string {
-	n := store.Get(m, key)
 	if store.IsNull(n) {
 		return ""
+	}
+	if n.Kind == yaml.SequenceNode {
+		parts := make([]string, len(n.Content))
+		for i, c := range n.Content {
+			parts[i] = htext(c)
+		}
+		return strings.Join(parts, ", ")
+	}
+	if n.Kind == yaml.ScalarNode && n.ShortTag() == "!!float" {
+		if f, err := strconv.ParseFloat(strings.ReplaceAll(n.Value, "_", ""), 64); err == nil &&
+			!math.IsInf(f, 0) && f == math.Trunc(f) {
+			return strconv.FormatFloat(f, 'f', 0, 64)
+		}
 	}
 	return strings.TrimSpace(store.PyStr(n))
 }
 
-// orDefault is `d.get(key) or default` rendered as a string.
-func orDefault(m *yaml.Node, key, def string) *yaml.Node {
-	if n := store.Get(m, key); store.Truthy(n) {
+// hesc is html-escaped display text, "—" when empty.
+func hesc(n *yaml.Node) string {
+	if s := store.PyHTMLEscape(htext(n)); s != "" {
+		return s
+	}
+	return dash
+}
+
+// orNode is Python's `value or default`.
+func orNode(n *yaml.Node, def string) *yaml.Node {
+	if store.Truthy(n) {
 		return n
 	}
 	return store.Str(def)
 }
 
-func renderGymCard(d *yaml.Node) string {
-	style := ""
-	if store.Truthy(store.Get(d, "full_width")) {
-		style = ` style="grid-column: 1 / -1;"`
+var firstNumber = regexp.MustCompile(`\d+(?:\.\d+)?`)
+
+// hnumber is the first number in a value ("67kg" → 67).
+func hnumber(s string) (float64, bool) {
+	m := firstNumber.FindString(s)
+	if m == "" {
+		return 0, false
 	}
-	chips := make([]string, 0)
-	for _, ex := range items(store.Get(d, "exercises")) {
-		chips = append(chips, `<span class="chip">`+esc(ex)+`</span>`)
-	}
-	return `          <article class="gym-card"` + style + `>
-            <span class="card-emoji" aria-hidden="true">` + "\U0001F3CB️" + `</span>
-            <div class="day">` + esc(store.Get(d, "day")) + `</div>
-            <p>
-              <b>` + esc(store.Get(d, "title")) + `</b><br>
-              ` + strings.Join(chips, "\n              ") + `
-            </p>
-          </article>`
+	f, err := strconv.ParseFloat(m, 64)
+	return f, err == nil
 }
 
-func renderRunCard(r *yaml.Node, emoji string) string {
-	link := sval(r, "link")
-	name := escStr(dash) // Python: esc(run.get("name", "—"))
-	if store.Has(r, "name") {
-		name = esc(store.Get(r, "name"))
+// hdate parses a run date: an unquoted YAML date, or "25 Oct 2026",
+// "25 October 2026", "2026-10-25", "25-10-2026".
+func hdate(n *yaml.Node) (time.Time, bool) {
+	n = store.Resolve(n)
+	if n != nil && n.Kind == yaml.ScalarNode && n.ShortTag() == "!!timestamp" {
+		return dates.ParseTimestamp(n.Value)
 	}
+	s := htext(n)
+	for _, layout := range []string{"2 Jan 2006", "2 January 2006", "2006-1-2", "2-1-2006"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return dates.New(t.Year(), t.Month(), t.Day()), true
+		}
+	}
+	return time.Time{}, false
+}
+
+var kmPattern = regexp.MustCompile(`(?i)^\s*(\d+(?:\.\d+)?)\s*(k|km)?\s*$`)
+
+// parseKm reads "10K", "3.46K", "10 km" as kilometres.
+func parseKm(n *yaml.Node) (float64, bool) {
+	m := kmPattern.FindStringSubmatch(htext(n))
+	if m == nil {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(m[1], 64)
+	return f, err == nil
+}
+
+// parseMinutes reads "52:00" → 52, "107:00" → 107, "1:04:30" → 64.5.
+func parseMinutes(n *yaml.Node) (float64, bool) {
+	parts := strings.Split(htext(n), ":")
+	nums := make([]float64, len(parts))
+	for i, p := range parts {
+		f, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
+		if err != nil {
+			return 0, false
+		}
+		nums[i] = f
+	}
+	switch len(nums) {
+	case 2:
+		return nums[0] + nums[1]/60, true
+	case 3:
+		return nums[0]*60 + nums[1] + nums[2]/60, true
+	}
+	return 0, false
+}
+
+// fmtClock formats minutes as m:ss (64.5 → "64:30").
+func fmtClock(minutes float64) string {
+	total := int(math.RoundToEven(minutes * 60))
+	return fmt.Sprintf("%d:%02d", total/60, total%60)
+}
+
+// rupees formats ₹1,234 (whole rupees, thousands separators).
+func rupees(n float64) string {
+	s := strconv.FormatFloat(math.Abs(n), 'f', 0, 64)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	if n < 0 {
+		s = "-" + s
+	}
+	return "₹" + s
+}
+
+// fmtMoney shows a cost: 0 → "Free", 2500 → "₹2,500", text otherwise.
+func fmtMoney(n *yaml.Node) string {
+	v, ok := hnumber(htext(n))
+	switch {
+	case !ok:
+		return htext(n)
+	case v == 0:
+		return "Free"
+	}
+	return rupees(v)
+}
+
+var hasScheme = regexp.MustCompile(`(?i)^https?://`)
+
+// splitLink: "example.com" → ("https://example.com", "");
+// "https://example.org/race  ID:1234" → ("https://example.org/race", "ID:1234").
+func splitLink(n *yaml.Node) (string, string) {
+	fields := strings.Fields(htext(n))
+	if len(fields) == 0 {
+		return "", ""
+	}
+	url := fields[0]
+	rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(htext(n)), url))
+	if !hasScheme.MatchString(url) {
+		url = "https://" + url
+	}
+	return url, rest
+}
+
+// countdown is "Today", "Tomorrow", "In 19 days" or "3 days ago".
+func countdown(d, today time.Time) string {
+	days := int(d.Sub(today).Hours() / 24)
+	switch {
+	case days == 0:
+		return "Today"
+	case days == 1:
+		return "Tomorrow"
+	case days > 1:
+		return fmt.Sprintf("In %d days", days)
+	}
+	return fmt.Sprintf("%d days ago", -days)
+}
+
+// byDate sorts runs by date; unparseable dates always go last.
+func byDate(runs []*yaml.Node, newestFirst bool) []*yaml.Node {
+	out := append([]*yaml.Node(nil), runs...)
+	key := func(r *yaml.Node) (int, int64) {
+		d, ok := hdate(store.Get(r, "date"))
+		if !ok {
+			return 1, 0
+		}
+		if newestFirst {
+			return 0, -d.Unix()
+		}
+		return 0, d.Unix()
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		ai, ad := key(out[i])
+		bi, bd := key(out[j])
+		if ai != bi {
+			return ai < bi
+		}
+		return ad < bd
+	})
+	return out
+}
+
+// ── Rendering (bare semantic tags only: no class attributes, no JS) ─────
+
+var exercisePattern = regexp.MustCompile(`^(.*?)\s+(\d+\s*x\s*\S+)$`)
+
+func renderRun(r *yaml.Node, planned bool, today time.Time) string {
+	name := hesc(store.Get(r, "name"))
+	url, linkNote := splitLink(store.Get(r, "link"))
 	heading := name
-	if link != "" {
-		heading = `<a href="` + escStr(link) + `" target="_blank" rel="noopener noreferrer" class="run-link">` + name + " ↗</a>"
+	if url != "" {
+		heading = `<a href="` + store.PyHTMLEscape(url) + `" rel="noopener">` + name + " ↗</a>"
 	}
 
-	var meta []string
+	d, hasDate := hdate(store.Get(r, "date"))
+	km, hasKm := parseKm(store.Get(r, "distance"))
+	mins, hasMins := parseMinutes(store.Get(r, "time"))
+
+	var rows strings.Builder
 	for i := 0; i+1 < len(r.Content); i += 2 {
-		k := store.PyStr(r.Content[i])
-		if k == "name" || k == "link" {
+		keyNode, value := r.Content[i], r.Content[i+1]
+		key := store.PyStr(keyNode)
+		isStr := keyNode.ShortTag() == "!!str"
+		if (isStr && skipFields[key]) || htext(value) == "" {
 			continue
 		}
-		reward := ""
-		if k == "reward" {
-			reward = "reward"
+		label := store.PyHTMLEscape(strings.ReplaceAll(key, "_", " "))
+		var shown string
+		switch {
+		case isStr && key == "cost":
+			shown = store.PyHTMLEscape(fmtMoney(value))
+		case isStr && key == "reward":
+			shown = "<mark>" + hesc(value) + "</mark>"
+		default:
+			shown = hesc(value)
 		}
-		meta = append(meta, `<div class="meta-item"><div class="label">`+escStr(strings.ToUpper(k))+`</div>`+
-			`<div class="value `+reward+`">`+esc(r.Content[i+1])+`</div></div>`)
+		rows.WriteString("<div><dt>" + label + "</dt><dd>" + shown + "</dd></div>")
+		// computed pace goes right after time
+		if isStr && key == "time" && hasKm && km != 0 && hasMins && mins != 0 {
+			rows.WriteString("<div><dt>pace</dt><dd>" + fmtClock(mins/km) + " /km</dd></div>")
+		}
 	}
-	return `            <article class="card">
-              <span class="card-emoji" aria-hidden="true">` + emoji + `</span>
-              <h3>` + heading + `</h3>
-              <div class="meta">
-                ` + strings.Join(meta, "\n                ") + `
-              </div>
-            </article>`
+	if linkNote != "" {
+		rows.WriteString("<div><dt>ref</dt><dd>" + store.PyHTMLEscape(linkNote) + "</dd></div>")
+	}
+
+	when := "<p>" + hesc(store.Get(r, "date")) + "</p>"
+	lead := ""
+	if planned && hasDate {
+		lead = "<p>" + countdown(d, today) + "</p>"
+	}
+
+	return `
+      <article>
+        <header><h3>` + heading + `</h3>` + when + `</header>
+        ` + lead + `
+        <dl>` + rows.String() + `</dl>
+      </article>`
 }
 
-// calcBMI is weight(kg) / height(m)², rounded to one decimal; "" if invalid.
-func calcBMI(weight, height string) string {
-	w, err1 := strconv.ParseFloat(strings.TrimSpace(strings.ReplaceAll(strings.ToLower(weight), "kg", "")), 64)
-	h, err2 := strconv.ParseFloat(strings.TrimSpace(strings.ReplaceAll(strings.ToLower(height), "cm", "")), 64)
-	if err1 != nil || err2 != nil {
-		return ""
+func renderGym(d *yaml.Node) string {
+	style := ""
+	if store.Truthy(store.Get(d, "full_width")) {
+		style = ` style="grid-column:1/-1"`
 	}
-	h /= 100
-	if h <= 0 {
-		return ""
+	var list strings.Builder
+	for _, ex := range items(store.Get(d, "exercises")) {
+		s := htext(ex)
+		if m := exercisePattern.FindStringSubmatch(s); m != nil {
+			list.WriteString("<li><span>" + store.PyHTMLEscape(m[1]) + "</span><code>" + store.PyHTMLEscape(m[2]) + "</code></li>")
+		} else if s != "" {
+			list.WriteString("<li><span>" + store.PyHTMLEscape(s) + "</span></li>")
+		}
 	}
-	rounded, _ := strconv.ParseFloat(strconv.FormatFloat(w/(h*h), 'f', 1, 64), 64)
-	return store.PyFloat(rounded)
+	body := "<p>Rest</p>"
+	if list.Len() > 0 {
+		body = "<ol>" + list.String() + "</ol>"
+	}
+	return `
+      <article` + style + `>
+        <header><h3>` + hesc(store.Get(d, "title")) + `</h3><p>` + hesc(store.Get(d, "day")) + `</p></header>
+        ` + body + `
+      </article>`
 }
 
-func renderPills(c *job.Ctx, meta *yaml.Node) string {
-	var pills []string
-	last := sval(meta, "last_updated")
-	if last == "" {
-		last = c.Now.Format("02 Jan 2006")
-	}
-	pills = append(pills, `<span class="pill" title="Last updated">`+"\U0001F553 "+escStr(last)+`</span>`)
-
-	weight := sval(meta, "weight")
-	if weight != "" {
-		pills = append(pills, `<span class="pill" title="Weight">`+"⚖️ "+escStr(weight)+`</span>`)
-	}
-	height := sval(meta, "height")
-	if height != "" {
-		pills = append(pills, `<span class="pill" title="Height">`+"\U0001F4CF "+escStr(height)+`</span>`)
-	}
-	bmi := sval(meta, "bmi")
-	if bmi == "" && weight != "" && height != "" {
-		bmi = calcBMI(weight, height)
-	}
-	if bmi != "" {
-		pills = append(pills, `<span class="pill" title="Body Mass Index">`+"\U0001F4CA BMI "+escStr(bmi)+`</span>`)
-	}
-	if bf := sval(meta, "body_fat"); bf != "" {
-		pills = append(pills, `<span class="pill" title="Body fat">`+"\U0001F9EC BF "+escStr(bf)+`%</span>`)
-	}
-	return strings.Join(pills, "\n")
-}
-
-func renderHealthPage(c *job.Ctx, meta *yaml.Node, planned, recent, gym []*yaml.Node) string {
-	description := sval(meta, "subtitle")
-	if description == "" {
-		description = "A personal run + gym progress diary."
+func renderStats(meta *yaml.Node, recent []*yaml.Node) string {
+	var tiles strings.Builder
+	tile := func(label, value string) {
+		if value != "" {
+			tiles.WriteString("<div><dt>" + label + "</dt><dd>" + store.PyHTMLEscape(value) + "</dd></div>")
+		}
 	}
 
-	cards := func(list []*yaml.Node, render func(*yaml.Node) string, empty string) string {
-		var parts []string
-		for _, n := range list {
-			if s := render(n); s != "" {
-				parts = append(parts, s)
+	// Race totals, computed from recent runs
+	totalKm, spent := 0.0, 0.0
+	var tens []float64
+	for _, r := range recent {
+		if k, ok := parseKm(store.Get(r, "distance")); ok {
+			totalKm += k
+			if k == 10 {
+				if t, ok := parseMinutes(store.Get(r, "time")); ok && t != 0 {
+					tens = append(tens, t)
+				}
 			}
 		}
-		if len(parts) == 0 {
-			return empty
+		if n, ok := hnumber(htext(store.Get(r, "cost"))); ok {
+			spent += n
 		}
-		return strings.Join(parts, "\n")
 	}
-	planned_ := cards(planned, func(r *yaml.Node) string { return renderRunCard(r, "\U0001F4C5") },
-		`<p class="empty-state">No planned runs yet.</p>`)
-	recent_ := cards(recent, func(r *yaml.Node) string { return renderRunCard(r, "\U0001F3C3‍♂️") },
-		`<p class="empty-state">No recent runs logged yet.</p>`)
-	gym_ := cards(gym, renderGymCard, `<p class="empty-state">No gym schedule set.</p>`)
 
-	// Same replacement order as the Python version.
-	page := healthTemplate
-	for _, r := range [][2]string{
-		{"{{TITLE}}", esc(orDefault(meta, "title", "Health Diary"))},
-		{"{{SUBTITLE}}", esc(orDefault(meta, "subtitle", "Personal training log"))},
-		{"{{TAGLINE}}", esc(orDefault(meta, "tagline", "RUN • GYM • PROGRESS"))},
-		{"{{FOOTER}}", esc(orDefault(meta, "footer", ""))},
-		{"{{DESCRIPTION}}", escStr(description)},
-		{"{{PILLS}}", renderPills(c, meta)},
-		{"{{PLANNED_CARDS}}", planned_},
-		{"{{RECENT_CARDS}}", recent_},
-		{"{{GYM_CARDS}}", gym_},
-	} {
-		page = strings.ReplaceAll(page, r[0], r[1])
+	if len(recent) > 0 {
+		tile("Races", strconv.Itoa(len(recent)))
 	}
-	return page
+	if totalKm != 0 {
+		tile("Distance", strconv.FormatFloat(totalKm, 'g', 6, 64)+" km")
+	}
+	if len(tens) > 0 {
+		best := tens[0]
+		for _, t := range tens[1:] {
+			best = math.Min(best, t)
+		}
+		tile("Best 10K", fmtClock(best))
+	}
+	if spent != 0 {
+		tile("Spent", rupees(spent))
+	}
+
+	// Body metrics
+	weight, height := htext(store.Get(meta, "weight")), htext(store.Get(meta, "height"))
+	tile("Weight", weight)
+	tile("Height", height)
+
+	bmi := htext(store.Get(meta, "bmi"))
+	w, okW := hnumber(weight)
+	h, okH := hnumber(height)
+	if bmi == "" && okW && w != 0 && okH && h != 0 {
+		m := h / 100
+		bmi = strconv.FormatFloat(w/(m*m), 'f', 1, 64)
+	}
+	tile("BMI", bmi)
+
+	bf := htext(store.Get(meta, "body_fat"))
+	if bf != "" && !strings.HasSuffix(bf, "%") {
+		bf += "%"
+	}
+	tile("Body fat", bf)
+
+	if tiles.Len() == 0 {
+		return ""
+	}
+	return "<dl>" + tiles.String() + "</dl>"
 }
 
-// healthManifest is the web app manifest, formatted exactly like Python's
-// json.dumps(indent=2) (non-ASCII as \uXXXX).
-func healthManifest(meta *yaml.Node) (string, error) {
-	name := sval(meta, "title")
-	if name == "" {
-		name = "Health Diary"
+func healthSection(id, title, note, cards, empty string) string {
+	if cards == "" {
+		cards = "<p>" + empty + "</p>"
 	}
-	short := name
-	if utf8.RuneCountInString(name) > 12 {
-		short = "Health"
-	}
-	tagline := sval(meta, "tagline")
-	if tagline == "" {
-		tagline = "Run • Gym • Progress"
-	}
-
-	type icon struct {
-		Src     string `json:"src"`
-		Sizes   string `json:"sizes"`
-		Type    string `json:"type"`
-		Purpose string `json:"purpose"`
-	}
-	m := struct {
-		Name            string `json:"name"`
-		ShortName       string `json:"short_name"`
-		Description     string `json:"description"`
-		StartURL        string `json:"start_url"`
-		Scope           string `json:"scope"`
-		Display         string `json:"display"`
-		Orientation     string `json:"orientation"`
-		BackgroundColor string `json:"background_color"`
-		ThemeColor      string `json:"theme_color"`
-		Icons           []icon `json:"icons"`
-	}{name, short, tagline, "./index.html", "./", "standalone", "portrait-primary", "#03050a", "#00e5a0",
-		[]icon{{"icon.svg", "any", "image/svg+xml", "any maskable"}}}
-
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(m); err != nil {
-		return "", err
-	}
-	return asciiJSON(strings.TrimRight(buf.String(), "\n")), nil
+	return `
+    <section id="` + id + `">
+      <h2>` + title + ` <small>` + note + `</small></h2>
+      ` + cards + `
+    </section>`
 }
 
-// asciiJSON escapes non-ASCII as \uXXXX (surrogate pairs above U+FFFF),
-// matching Python's json.dumps default ensure_ascii=True.
-func asciiJSON(s string) string {
+// healthFavicon is the logo as an inline data: URI (Python urllib quote()).
+func healthFavicon() string {
+	const safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-~/"
 	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r < 0x80:
-			b.WriteRune(r)
-		case r <= 0xFFFF:
-			fmt.Fprintf(&b, `\u%04x`, r)
-		default:
-			r -= 0x10000
-			fmt.Fprintf(&b, `\u%04x\u%04x`, 0xD800+(r>>10), 0xDC00+(r&0x3FF))
+	for _, c := range []byte(healthFaviconSVG) {
+		if strings.IndexByte(safe, c) >= 0 {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
 		}
 	}
-	return b.String()
+	return "data:image/svg+xml," + b.String()
+}
+
+func renderHealthPage(today time.Time, meta *yaml.Node, planned, recent, gym []*yaml.Node) string {
+	title := hesc(orNode(store.Get(meta, "title"), "Health Diary"))
+	subtitle := hesc(orNode(store.Get(meta, "subtitle"), "Run • Lift • Improve"))
+	tagline := store.PyHTMLEscape(htext(store.Get(meta, "tagline")))
+	footer := store.PyHTMLEscape(htext(store.Get(meta, "footer")))
+	updated := htext(store.Get(meta, "last_updated"))
+	if updated == "" {
+		updated = today.Format("02 Jan 2006")
+	}
+	updated = store.PyHTMLEscape(updated)
+
+	planned = byDate(planned, false)
+	recent = byDate(recent, true)
+
+	var plannedHTML, recentHTML, gymHTML strings.Builder
+	for _, r := range planned {
+		plannedHTML.WriteString(renderRun(r, true, today))
+	}
+	for _, r := range recent {
+		recentHTML.WriteString(renderRun(r, false, today))
+	}
+	for _, d := range gym {
+		gymHTML.WriteString(renderGym(d))
+	}
+
+	taglineHTML := ""
+	if tagline != "" {
+		taglineHTML = "<p>" + tagline + "</p>"
+	}
+
+	return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="` + subtitle + `">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#3a807a">
+  <link rel="icon" type="image/svg+xml" href="` + healthFavicon() + `">
+  <title>` + title + `</title>
+  <style>` + healthCSS + `</style>
+</head>
+<body>
+  <header>
+    ` + healthLogo + `
+    <div>
+      <h1>` + title + `</h1>
+      <p>` + subtitle + `</p>
+      ` + taglineHTML + `
+    </div>
+    <nav>
+      <a href="#stats">Stats</a>
+      <a href="#planned">Planned</a>
+      <a href="#recent">Recent</a>
+      <a href="#gym">Gym</a>
+    </nav>
+  </header>
+
+  <main>
+    ` + healthSection("stats", "Stats", "at a glance", renderStats(meta, recent), "No stats yet.") + `
+    ` + healthSection("planned", "Planned", strconv.Itoa(len(planned)), plannedHTML.String(), "No planned runs yet.") + `
+    ` + healthSection("recent", "Recent runs", strconv.Itoa(len(recent)), recentHTML.String(), "No recent runs logged yet.") + `
+    ` + healthSection("gym", "Gym schedule", strconv.Itoa(len(gym))+" days", gymHTML.String(), "No gym schedule set.") + `
+  </main>
+
+  <footer>
+    <span>` + footer + `</span>
+    <span>Updated ` + updated + `</span>
+  </footer>
+</body>
+</html>
+`
 }
