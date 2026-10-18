@@ -25,7 +25,7 @@ paths:
   events: /data/notes/data/event.md              # shared with Omnimo and Natlas
   event_backup: /data/notes/data/event.md.bck
   subscriptions: /data/notes/data/subscription.md
-  birthdays: /data/notes/data/birthdays.md
+  calendar: /data/notes/data/calendar.md         # Google Calendar copy (calendar_sync)
   health: /data/notes/data/health.md
   inbox: /data/notes/inbox
   archive: /data/notes/archive
@@ -77,10 +77,11 @@ jobs:
     description: "Move closed one-time events older than 30 days to event.md.bck."
     # options: { archive_after_days: 30 }
 
-  # Sync Google Contacts birthdays to birthdays.md (weekly, Monday)
-  birthday_sync:
-    schedule: "20 2 * * 1"
-    description: "Sync birthdays from Google Contacts to birthdays.md."
+  # Copy all Google Calendar events (birthdays, holidays, your events) to calendar.md
+  calendar_sync:
+    schedule: "20 2 * * *"
+    description: "Sync Google Calendar events to calendar.md."
+    # options: { past_days: 7, ahead_days: 365, exclude: [], categories: { Family: family } }
 
   # Advance overdue events, reopen recurring, purge old closed, sort
   event_update:

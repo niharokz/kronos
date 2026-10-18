@@ -25,7 +25,7 @@ func testCtx(t *testing.T, today string, dry bool) (*job.Ctx, string, *bytes.Buf
   events: `+dir+`/event.md
   event_backup: `+dir+`/event.md.bck
   subscriptions: `+dir+`/subscription.md
-  birthdays: `+dir+`/birthdays.md
+  calendar: `+dir+`/calendar.md
   daily: `+dir+`/daily.md
 `), "test.yml")
 	if err != nil {

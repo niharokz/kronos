@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -17,8 +15,9 @@ import (
 
 // daily_update writes the agenda (paths.daily) with three sections —
 // Overdue, Due Today, Upcoming (next upcoming_days, default 7) — from
-// events, subscriptions and birthdays. If a source file can't be read the
-// agenda is still written, then the job fails so you get an alert.
+// events, subscriptions and calendar.md (from calendar_sync). If a source
+// file can't be read the agenda is still written, then the job fails so you
+// get an alert.
 
 func init() { job.Register("daily_update", dailyUpdate) }
 
@@ -114,39 +113,51 @@ func buildAgenda(c *job.Ctx, problems *[]string) (overdue, dueToday, upcoming []
 		}
 	}
 
-	for _, p := range readList(c, c.Path("birthdays"), "people", problems) { // kronos.yml: paths.birthdays
-		parts := strings.Split(pyGet(p, "birthday", ""), "-")
-		if len(parts) != 3 {
+	for _, e := range readList(c, c.Path("calendar"), "events", problems) { // kronos.yml: paths.calendar
+		first, ok := store.DateOf(e, "date")
+		if !ok {
 			continue
 		}
-		month, err1 := strconv.Atoi(strings.TrimSpace(parts[1]))
-		day, err2 := strconv.Atoi(strings.TrimSpace(parts[2]))
-		if err1 != nil || err2 != nil {
-			continue
+		last, ok := store.DateOf(e, "end") // multi-day: shown every day it lasts
+		if !ok || last.Before(first) {
+			last = first
 		}
-		when := nextBirthday(month, day, today)
-		name := pyGet(p, "name", "Unknown")
+		item := calendarPrefix(pyGet(e, "category", "")) + calendarTitle(e)
+		if t := pyGet(e, "time", ""); t != "" {
+			item += " " + t
+		}
 		switch {
-		case when.Equal(today):
-			dueToday = append(dueToday, "BIRTHDAY- "+name)
-		case !when.After(horizon):
-			upcoming = append(upcoming, fmt.Sprintf("BIRTHDAY- %s (%s)", name, dates.Format(when)))
+		case last.Before(today):
+			// past entries (calendar_sync keeps a few days back) are not agenda items
+		case !first.After(today):
+			dueToday = append(dueToday, item)
+		case !first.After(horizon):
+			upcoming = append(upcoming, fmt.Sprintf("%s (%s)", item, dates.Format(first)))
 		}
 	}
 	return overdue, dueToday, upcoming
 }
 
-// nextBirthday is the next occurrence on or after today. An impossible date
-// (29 Feb in a non-leap year, or bad data) falls back to 28 Feb, as before.
-func nextBirthday(month, day int, today time.Time) time.Time {
-	for _, year := range []int{today.Year(), today.Year() + 1} {
-		candidate := dates.New(year, 2, 28)
-		if month >= 1 && month <= 12 && day >= 1 && day <= dates.DaysIn(year, time.Month(month)) {
-			candidate = dates.New(year, time.Month(month), day)
-		}
-		if !candidate.Before(today) {
-			return candidate
+// calendarPrefix marks an agenda line by its calendar.md category.
+func calendarPrefix(category string) string {
+	switch category {
+	case "birthday", "anniversary":
+		return "BIRTHDAY- "
+	case "holiday", "festival":
+		return "HOLIDAY- "
+	}
+	return "CALENDAR- "
+}
+
+// calendarTitle drops Google's "'s birthday" suffix, so birthdays read "BIRTHDAY- Asha".
+func calendarTitle(e *yaml.Node) string {
+	title := pyGet(e, "title", "Unknown")
+	if pyGet(e, "category", "") == "birthday" {
+		for _, suffix := range []string{"'s birthday", "’s birthday"} {
+			if strings.HasSuffix(strings.ToLower(title), suffix) && len(title) > len(suffix) {
+				return title[:len(title)-len(suffix)]
+			}
 		}
 	}
-	return dates.New(today.Year()+1, 2, 28)
+	return title
 }

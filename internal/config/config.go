@@ -60,7 +60,7 @@ var defaultPaths = map[string]string{
 	"events":        "/data/notes/data/event.md",
 	"event_backup":  "/data/notes/data/event.md.bck",
 	"subscriptions": "/data/notes/data/subscription.md",
-	"birthdays":     "/data/notes/data/birthdays.md",
+	"calendar":      "/data/notes/data/calendar.md",
 	"health":        "/data/notes/data/health.md",
 	"inbox":         "/data/notes/inbox",
 	"archive":       "/data/notes/archive",

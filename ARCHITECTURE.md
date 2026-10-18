@@ -12,7 +12,7 @@ Kronos is the time-driven half of Nimory: nightly maintenance of the vault's dat
 | Project | Role | Shares with Kronos |
 |---|---|---|
 | **Omnimo** (Go) | Telegram bot + AI (Nimo) | `event.md`, the **outbox** folder |
-| **Natlas v2** (Go) | Web UI for the data files | `event.md`, `subscription.md`, `health.md`, `birthdays.md` |
+| **Natlas v2** (Go) | Web UI for the data files | `event.md`, `subscription.md`, `health.md` (`birthdays.md` is no longer updated — see `calendar.md`) |
 | **Kronos** (Go) | Scheduler | — |
 
 Kronos never talks to Telegram or any AI. It writes outbox files; Omnimo sends them.
@@ -91,10 +91,10 @@ Dependencies: `gopkg.in/yaml.v3` (via its GitHub mirror — `replace` in go.mod,
 | 02:10 | `subscription_update` | `subscription.md`, `event.md` | both | — |
 | 02:12 | `arthik_subscriptions` | `subscription.md`, `event.md`, `data/finance/inbox/kronos.md` | `data/finance/inbox/kronos.md` (only Kronos writes it) | `max_catch_up_days` (3), `keep_days` (60) |
 | 02:15 | `event_archive` | `event.md`, `event.md.bck` | backup first, then `event.md` | `archive_after_days` (30) |
-| 02:20 Mon | `birthday_sync` | People API, `config/token.json` | `birthdays.md` (+ token on refresh, 0600) | — |
+| 02:20 | `calendar_sync` | Calendar API (all visible calendars), `config/token.json` | `calendar.md` (+ token on refresh, 0600) | `past_days` (7), `ahead_days` (365), `exclude` ([]), `categories` ({}) |
 | 02:30 | `event_update` | `event.md` | `event.md` | `purge_after_days` (365) |
 | 02:45 + watch | `health_website` | `health.md` | `<paths.health_site>/index.html` | — |
-| 03:00 | `daily_update` | events, subscriptions, birthdays | `inbox/daily.md` | `upcoming_days` (7) |
+| 03:00 | `daily_update` | events, subscriptions, calendar | `inbox/daily.md` | `upcoming_days` (7) |
 | 03:30 1 Jan | `archive_rollover` | `archive/*` | `archive/<year-1>/` | — |
 | 05:40 | `nimo_briefing` | `inbox/daily.md` | outbox briefing | — |
 
@@ -151,20 +151,25 @@ subscriptions:
 ```
 Active + overdue → roll forward (unknown cycle → WARN, skipped); **then** due == today → pending event `sub-<slug>-<date>` in `event.md` (idempotent). `event.md` unusable → WARN, subscriptions still saved. Legacy `active:`/`cancelled:` read, written back as `subscriptions:`. Sort: active first, then due date.
 
-### `birthdays.md`
+### `calendar.md`
 ```yaml
-type: birthdays
+type: calendar
 version: 1
 last_sync: '<YYYY-MM-DD>'
-people:
-  - id: people/<id>
-    name: <str>
-    birthday: '<YYYY-MM-DD>'   # 0000 when year unknown; sorted by MM-DD
+events:                        # sorted by date, time ('' first), title
+  - id: <Google event id>      # per repeat (singleEvents=true)
+    title: <summary | (no title)>
+    date: '<YYYY-MM-DD>'
+    end: '<YYYY-MM-DD>'        # multi-day only; last day, inclusive
+    time: '<HH:MM>'            # timed only; container TZ
+    category: <tag>            # birthday | anniversary | holiday | festival | reservation | out_of_office | focus_time | working_location | event | options.categories
+    calendar: <your name for the calendar>
+    location: <str>            # when set
 ```
-0 contacts returned → FAIL, file kept. Token: refreshed when missing/expired (4 min margin) via `token_uri` + `refresh_token/client_id/client_secret`; written back atomically 0600 (not in dry runs).
+Calendars: `calendarList` (hidden ones skipped) minus `exclude` (name or id). Category: `eventType` birthday (+ `birthdayProperties.type` anniversary), holiday calendar (`#holiday@` id; description starting `Observance` → festival, else holiday), `fromGmail` → reservation, outOfOffice/focusTime/workingLocation, else event; `options.categories` (calendar name or id → tag, lower-cased) overrides. Window: today − `past_days` … today + `ahead_days`. Cancelled entries dropped. Rewritten in full on each run. Any calendar failing, or 0 events in total → FAIL, file kept (never half a calendar). Token: refreshed when missing/expired (4 min margin) via `token_uri` + `refresh_token/client_id/client_secret`; written back atomically 0600 (not in dry runs).
 
 ### `inbox/daily.md`
-`# Overdue` / `# Due Today` / `# Upcoming` (7 d), each sorted, sections separated by a blank line. Prefixes `EVENT:` · `SUBSCRIPTION-` · `BIRTHDAY-`. Pending events are always overdue. Due-today subscriptions appear only via their auto event. Birthdays wrap New Year; impossible dates → 28 Feb. Broken source → agenda written anyway, then FAIL (`Agenda incomplete – unreadable: <files>`).
+`# Overdue` / `# Due Today` / `# Upcoming` (7 d), each sorted, sections separated by a blank line. Prefixes `EVENT:` · `SUBSCRIPTION-` · `BIRTHDAY-` · `HOLIDAY-` · `CALENDAR-` (the last three from `calendar.md` by `category`: birthday/anniversary → `BIRTHDAY-`, holiday/festival → `HOLIDAY-`, rest → `CALENDAR-`; a birthday's `'s birthday` suffix is dropped; timed entries get ` HH:MM`). Pending events are always overdue. Due-today subscriptions appear only via their auto event. A calendar entry is *today* from `date` to `end`; past entries are not shown. Broken source → agenda written anyway, then FAIL (`Agenda incomplete – unreadable: <files>`).
 
 ### `health.md` → health site
 `meta` (title, tagline, subtitle, footer, last_updated, weight, height, bmi?, body_fat) · `runs.planned[]` / `runs.recent[]` (name, date, link?, any keys → label/value, `reward` highlighted) · `gym[]` (day, title, exercises[], full_width?).
@@ -236,13 +241,13 @@ Remove a job: delete `<name>.go` + `<name>_test.go` and its `kronos.yml.example`
 
 ## 10. Tests
 
-`go test ./...` (also in `docker build`): dates (Python-equal rules, anchor), store (error messages, round-trip order, PyStr/PyFloat/escape, UniquePath), outbox (contract), jobs (anchor drift, no anchor for ordinary days, legacy normalisation, broken file never overwritten, dry run writes nothing, missed-day subscription event + idempotency, New Year birthdays, partial agenda, arthik drafts window/dedupe/prune, registry = kronos.yml.example), scheduler (ok/fail/panic/timeout, command env/exit/stderr/timeout, bad jobs skipped + alerted, catch-up order and rules, Prev, watch debounce).
+`go test ./...` (also in `docker build`): dates (Python-equal rules, anchor), store (error messages, round-trip order, PyStr/PyFloat/escape, UniquePath), outbox (contract), jobs (anchor drift, no anchor for ordinary days, legacy normalisation, broken file never overwritten, dry run writes nothing, missed-day subscription event + idempotency, calendar sync (fake Google: categories incl. festival/anniversary/reservation/override, times, multi-day, cancelled, sort, file kept on failure), agenda from calendar.md, partial agenda, arthik drafts window/dedupe/prune, registry = kronos.yml.example), scheduler (ok/fail/panic/timeout, command env/exit/stderr/timeout, bad jobs skipped + alerted, catch-up order and rules, Prev, watch debounce).
 
 ---
 
 ## 11. Known limits
 
-- Jobs are sequential; a slow job delays the next one (all current jobs take < 1 s; birthday_sync is bounded by a 60 s HTTP timeout).
+- Jobs are sequential; a slow job delays the next one (all current jobs take < 1 s; calendar_sync is bounded by a 60 s HTTP timeout per request).
 - An abandoned (timed-out) Go job keeps running in the background until it returns.
 - `event_archive` ages events by `date`, not close date (no `closed_on` field).
 - Daemon crash count never resets.

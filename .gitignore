@@ -12,6 +12,10 @@ scripts/*
 **/credentials.json
 **/client_secret*.json
 
+# Patch zips kept locally (applied on the server, never committed)
+/patch/
+/patches/
+
 # ── Build and test output ───────────────────────────────────────────────
 /kronos
 *.exe

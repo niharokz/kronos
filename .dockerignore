@@ -12,3 +12,5 @@ scripts/
 *.md
 .idea/
 .vscode/
+patch/
+patches/
