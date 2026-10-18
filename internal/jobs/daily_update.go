@@ -138,15 +138,12 @@ func buildAgenda(c *job.Ctx, problems *[]string) (overdue, dueToday, upcoming []
 	return overdue, dueToday, upcoming
 }
 
-// calendarPrefix marks an agenda line by its calendar.md category.
+// calendarPrefix is the category in capitals ("BIRTHDAY- ", "FESTIVAL- " …); plain events are "CALENDAR- ".
 func calendarPrefix(category string) string {
-	switch category {
-	case "birthday", "anniversary":
-		return "BIRTHDAY- "
-	case "holiday", "festival":
-		return "HOLIDAY- "
+	if category == "" || category == "event" {
+		return "CALENDAR- "
 	}
-	return "CALENDAR- "
+	return strings.ToUpper(category) + "- "
 }
 
 // calendarTitle drops Google's "'s birthday" suffix, so birthdays read "BIRTHDAY- Asha".

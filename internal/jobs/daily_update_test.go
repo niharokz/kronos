@@ -29,6 +29,7 @@ func TestAgendaCalendarEntries(t *testing.T) {
 - {title: Conference, date: '2026-10-04', end: '2026-10-06', category: event}
 - {title: Dentist, date: '2026-10-05', time: '10:30', category: event}
 - {title: Diwali, date: '2026-10-08', category: holiday}
+- {title: Karva Chauth, date: '2026-10-07', category: festival}
 - {title: Ravi’s birthday, date: '2026-10-09', category: birthday}
 - {title: Far away, date: '2026-11-30', category: event}
 `)
@@ -37,7 +38,7 @@ func TestAgendaCalendarEntries(t *testing.T) {
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "daily.md"))
 	want := "# Overdue\n\n# Due Today\nCALENDAR- Conference\nCALENDAR- Dentist 10:30\n\n" +
-		"# Upcoming\nBIRTHDAY- Ravi (2026-10-09)\nHOLIDAY- Diwali (2026-10-08)\n"
+		"# Upcoming\nBIRTHDAY- Ravi (2026-10-09)\nFESTIVAL- Karva Chauth (2026-10-07)\nHOLIDAY- Diwali (2026-10-08)\n"
 	if string(raw) != want {
 		t.Errorf("daily.md =\n%s\nwant\n%s", raw, want)
 	}
