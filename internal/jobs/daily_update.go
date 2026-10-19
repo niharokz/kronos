@@ -151,8 +151,8 @@ func calendarTitle(e *yaml.Node) string {
 	title := pyGet(e, "title", "Unknown")
 	if pyGet(e, "category", "") == "birthday" {
 		for _, suffix := range []string{"'s birthday", "’s birthday"} {
-			if strings.HasSuffix(strings.ToLower(title), suffix) && len(title) > len(suffix) {
-				return title[:len(title)-len(suffix)]
+			if n := len(title) - len(suffix); n > 0 && strings.EqualFold(title[n:], suffix) {
+				return title[:n]
 			}
 		}
 	}

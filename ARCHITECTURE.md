@@ -1,7 +1,7 @@
 # Kronos — Architecture (internal)
 
 > Internal reference for the Nimory homelab. Share this file (plus only the files being changed) instead of the full source.
-> Contains no secret values — only names and paths. Last reviewed: 2026-10-10 (v1.0.0, replaces Taskmaster).
+> Contains no secret values — only names and paths. Last reviewed: 2026-10-20 (v1.0.0, replaces Taskmaster).
 
 ---
 
@@ -30,7 +30,7 @@ Host: a small Debian box with Docker Compose. Repo: `gitlab.com/niharokz/kronos`
 | User / hardening | `.env` `PUID:PGID` (image default `USER 1000:1000`), `init: true`, `read_only: true` + tmpfs `/tmp` (16 MB), `cap_drop: [ALL]`, `no-new-privileges`, `pids_limit: 256`, `mem_limit: 256m`, `stop_grace_period: 1m` |
 | TZ | `.env` `TZ` (default UTC); zone data is compiled in (`time/tzdata`), so it works on minimal images |
 | Volumes | `$NOTE_PATH → /data/notes` · `$WEB_PATH → /docker/web` · `./kronos.yml → /app/kronos.yml:ro` · `./config → /app/config` (rw: token refresh) · `./scripts → /app/scripts:ro` |
-| Network | default bridge (only `people.googleapis.com` / `oauth2.googleapis.com` outbound); no ports |
+| Network | default bridge (only `www.googleapis.com` (Calendar API) / `oauth2.googleapis.com` outbound); no ports |
 | Secrets / host values | `.env` (gitignored, template `.env.example`): `DATA_PATH` (base), `NOTE_PATH` (`${DATA_PATH}/notes`), `WEB_PATH`, `PUID`, `PGID`, `TZ` — used only by compose, not passed into the container. Google OAuth in `./config/token.json` (+ `credentials.json`, only for regenerating) |
 | Ignored | `.gitignore`: `.env*` (except `.env.example`), `kronos.yml`, `config/*`, `scripts/*` (except `*.example`), `**/token.json`, `**/credentials.json`, `**/client_secret*.json`, build output, editor/OS files · `.dockerignore`: the same secrets + `.git`, CI file, docs |
 | Logs | stdout (json-file 10 MB × 3) + `/data/notes/logs/kronos/kronos_YYYYMM.log` |

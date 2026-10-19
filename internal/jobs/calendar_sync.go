@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"gitlab.com/niharokz/kronos/internal/dates"
 	"gitlab.com/niharokz/kronos/internal/job"
 	"gitlab.com/niharokz/kronos/internal/store"
@@ -63,16 +65,8 @@ func calendarSync(c *job.Ctx) error {
 		return err
 	}
 
-	skip := map[string]bool{}
-	for _, s := range c.Strings("exclude", nil) { // kronos.yml: jobs.calendar_sync.options.exclude
-		skip[strings.ToLower(s)] = true
-	}
-	own := map[string]string{}                                     // calendar → category set in kronos.yml
-	if m, ok := c.Job.Options["categories"].(map[string]any); ok { // kronos.yml: jobs.calendar_sync.options.categories
-		for k, v := range m {
-			own[strings.ToLower(k)] = strings.ToLower(strings.TrimSpace(fmt.Sprint(v)))
-		}
-	}
+	skip := lowerSet(c.Strings("exclude", nil))             // kronos.yml: jobs.calendar_sync.options.exclude
+	own := categoryOverrides(c)                             // kronos.yml: jobs.calendar_sync.options.categories
 	from := c.Today.AddDate(0, 0, -c.Int("past_days", 7))   // kronos.yml: jobs.calendar_sync.options.past_days
 	to := c.Today.AddDate(0, 0, c.Int("ahead_days", 365)+1) // kronos.yml: jobs.calendar_sync.options.ahead_days
 
@@ -86,11 +80,7 @@ func calendarSync(c *job.Ctx) error {
 		if err != nil {
 			return err // any failure keeps the old file: never write half a calendar
 		}
-		cat := own[strings.ToLower(cal.name)]
-		if cat == "" {
-			cat = own[strings.ToLower(cal.id)]
-		}
-		if cat != "" {
+		if cat := firstNonEmpty(own[strings.ToLower(cal.name)], own[strings.ToLower(cal.id)]); cat != "" {
 			for i := range got {
 				got[i].category = cat // your category for this calendar wins
 			}
@@ -102,21 +92,35 @@ func calendarSync(c *job.Ctx) error {
 	if len(events) == 0 {
 		return fmt.Errorf("Google returned 0 events from %d calendar(s) – kept existing calendar.md", used)
 	}
+
+	root := calendarDoc(events, c.Today)
+	data, err := store.Encode(root)
+	if err != nil {
+		return err
+	}
+	if err := c.WriteFile(c.Path("calendar"), data); err != nil { // kronos.yml: paths.calendar
+		return err
+	}
+	c.Log.OK("Synced %d event(s) from %d calendar(s), %s – %s", len(events), used, dates.Format(from), dates.Format(to.AddDate(0, 0, -1)))
+	return nil
+}
+
+// calendarDoc builds calendar.md: entries sorted by date, then time (all-day first), then title.
+func calendarDoc(events []calEvent, today time.Time) *yaml.Node {
 	sort.SliceStable(events, func(i, j int) bool {
 		a, b := events[i], events[j]
 		if a.date != b.date {
 			return a.date < b.date
 		}
 		if a.time != b.time {
-			return a.time < b.time // all-day ("") first
+			return a.time < b.time
 		}
 		return a.title < b.title
 	})
-
 	root := store.NewMapping()
 	store.Set(root, "type", store.Str("calendar"))
 	store.Set(root, "version", store.Int(1))
-	store.Set(root, "last_sync", store.Date(c.Today))
+	store.Set(root, "last_sync", store.Date(today))
 	list := store.Seq()
 	for _, e := range events {
 		m := store.NewMapping()
@@ -137,16 +141,35 @@ func calendarSync(c *job.Ctx) error {
 		list.Content = append(list.Content, m)
 	}
 	store.Set(root, "events", list)
+	return root
+}
 
-	data, err := store.Encode(root)
-	if err != nil {
-		return err
+// categoryOverrides reads options.categories: calendar name or id → your category (lower-cased).
+func categoryOverrides(c *job.Ctx) map[string]string {
+	own := map[string]string{}
+	if m, ok := c.Job.Options["categories"].(map[string]any); ok {
+		for k, v := range m {
+			own[strings.ToLower(k)] = strings.ToLower(strings.TrimSpace(fmt.Sprint(v)))
+		}
 	}
-	if err := c.WriteFile(c.Path("calendar"), data); err != nil { // kronos.yml: paths.calendar
-		return err
+	return own
+}
+
+func lowerSet(list []string) map[string]bool {
+	set := map[string]bool{}
+	for _, s := range list {
+		set[strings.ToLower(s)] = true
 	}
-	c.Log.OK("Synced %d event(s) from %d calendar(s), %s – %s", len(events), used, dates.Format(from), dates.Format(to.AddDate(0, 0, -1)))
-	return nil
+	return set
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // accessToken returns a valid access token from token.json, refreshing it
