@@ -61,7 +61,7 @@ Any job can also have `watch: [files]`: it then runs again ~10–20 s after one 
 | `event_archive` | daily 02:15 | Moves closed one-time events older than 30 days into a backup file. |
 | `calendar_sync` | daily 02:20 | Copies every visible Google Calendar (your events, contact birthdays, holidays, shared calendars) into `calendar.md` — Calendar API, read-only, 7 days back to 365 ahead. |
 | `event_update` | daily 02:30 | Overdue one-time events → today as `pending`; overdue recurring → next date; closed recurring → reopened at next date; sorts. |
-| `health_website` | daily 02:45 + on edit | Renders `health.md` into one static page in the nss look: classless, no JavaScript, dark/light by system. Adds a stats strip, pace per run and countdowns. |
+| `health_website` | daily 02:45 + on edit | Renders `health.md` into one static page in the nss look: classless, no JavaScript, dark/light by system. Adds a stats strip, pace per run, countdowns and a Daily activity section (steps, sleep, heart rate, calories charts) from `daily:` entries. |
 | `daily_update` | daily 03:00 | Writes the agenda: **Overdue**, **Due Today**, **Upcoming (7 days)** — events, subscriptions and `calendar.md` (lines start with the category, e.g. `BIRTHDAY- Asha`, `FESTIVAL- Karva Chauth`). |
 | `archive_rollover` | 1 Jan 03:30 | Moves loose archive files into a folder named after the previous year. |
 | `nimo_briefing` | daily 05:40 | Sends the agenda as a *briefing* — the bot posts it and adds an AI commentary. |
@@ -175,7 +175,16 @@ gym:
     title: Push
     exercises: [DB Bench Press 4x10, Dips]   # "4x10"-style sets are shown on the right
     full_width: false
+daily:                               # one entry per day (e.g. from a wearable); every field but date optional
+  - date: '2026-10-19'
+    steps: 6020
+    sleep_h: 7.8                     # plus deep_h, rem_h, light_h, awake_h for the stage chart
+    hr_rest: 58                      # hr_avg, hr_max: three-line heart-rate chart
+    kcal_total: 2190
+    kcal_active: 410
 ```
+
+The Daily activity section charts the latest 30 entries; a chart with no values is left out.
 
 ---
 

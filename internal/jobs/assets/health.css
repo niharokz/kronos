@@ -2,6 +2,7 @@
 :root {
   --nss-accent: #3a807a;
   --nss-accent-hi: #5fb3ab;
+  --nss-chart-3: #28433f;
   --nss-bg: #0e1514;
   --nss-surface: #141e1d;
   --nss-fg: #e6efed;
@@ -15,6 +16,7 @@
 @media (prefers-color-scheme: light) {
   :root {
     --nss-accent-hi: #2d6862;
+    --nss-chart-3: #a9cac6;
     --nss-bg: #f5f8f7;
     --nss-surface: #ffffff;
     --nss-fg: #16211f;
@@ -112,6 +114,7 @@ article > p {
   margin: 0; color: var(--nss-accent-hi);
   font: 600 .74rem var(--nss-mono); text-transform: uppercase; letter-spacing: .12em;
 }
+article svg { display: block; width: 100%; height: auto; }
 article dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem 1rem; margin: 0; }
 article dt {
   font: .62rem var(--nss-mono); text-transform: uppercase;

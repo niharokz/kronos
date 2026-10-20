@@ -71,8 +71,9 @@ func healthWebsite(c *job.Ctx) error {
 			gym = append(gym, g)
 		}
 	}
+	daily := validDailyEntries(c, store.Get(data, "daily"))
 
-	page := renderHealthPage(c.Today, meta, planned, recent, gym)
+	page := renderHealthPage(c.Today, meta, planned, recent, gym, daily)
 
 	out := c.Path("health_site") // kronos.yml: paths.health_site (under .env WEB_PATH)
 	if err := c.MkdirAll(out); err != nil {
@@ -81,7 +82,7 @@ func healthWebsite(c *job.Ctx) error {
 	if err := c.WriteFile(filepath.Join(out, "index.html"), []byte(page)); err != nil {
 		return err
 	}
-	c.Log.OK("Health site written to %s (planned=%d, recent=%d, gym=%d)", out, len(planned), len(recent), len(gym))
+	c.Log.OK("Health site written to %s (planned=%d, recent=%d, gym=%d, daily=%d)", out, len(planned), len(recent), len(gym), len(daily))
 	return nil
 }
 
@@ -507,7 +508,7 @@ func healthFavicon() string {
 	return "data:image/svg+xml," + b.String()
 }
 
-func renderHealthPage(today time.Time, meta *yaml.Node, planned, recent, gym []*yaml.Node) string {
+func renderHealthPage(today time.Time, meta *yaml.Node, planned, recent, gym, daily []*yaml.Node) string {
 	title := hesc(orNode(store.Get(meta, "title"), "Health Diary"))
 	subtitle := hesc(orNode(store.Get(meta, "subtitle"), "Run • Lift • Improve"))
 	tagline := store.PyHTMLEscape(htext(store.Get(meta, "tagline")))
@@ -559,6 +560,7 @@ func renderHealthPage(today time.Time, meta *yaml.Node, planned, recent, gym []*
     </div>
     <nav>
       <a href="#stats">Stats</a>
+      <a href="#daily">Daily</a>
       <a href="#planned">Planned</a>
       <a href="#recent">Recent</a>
       <a href="#gym">Gym</a>
@@ -567,6 +569,7 @@ func renderHealthPage(today time.Time, meta *yaml.Node, planned, recent, gym []*
 
   <main>
     ` + healthSection("stats", "Stats", "at a glance", renderStats(meta, recent), "No stats yet.") + `
+    ` + healthSection("daily", "Daily activity", strconv.Itoa(len(daily))+" days logged", renderDailyCards(daily), "No daily log yet.") + `
     ` + healthSection("planned", "Planned", strconv.Itoa(len(planned)), plannedHTML.String(), "No planned runs yet.") + `
     ` + healthSection("recent", "Recent runs", strconv.Itoa(len(recent)), recentHTML.String(), "No recent runs logged yet.") + `
     ` + healthSection("gym", "Gym schedule", strconv.Itoa(len(gym))+" days", gymHTML.String(), "No gym schedule set.") + `
