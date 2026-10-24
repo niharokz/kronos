@@ -96,6 +96,8 @@ type Ctx struct {
 	Cfg    *config.Config
 	Job    config.Job // this job's entry in kronos.yml
 	Out    io.Writer  // where dry-run diffs and notices are printed
+
+	Sandbox bool // kronos run --rahi-path: test folder; jobs may keep test state even in a dry run
 }
 
 // NewCtx builds the context for one run.

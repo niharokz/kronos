@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"gitlab.com/niharokz/kronos/internal/config"
+	"gitlab.com/niharokz/kronos/internal/dates"
 	"gitlab.com/niharokz/kronos/internal/job"
 	"gitlab.com/niharokz/kronos/internal/outbox"
 )
@@ -26,6 +27,19 @@ import (
 // Kronos down does not interrupt a running job (it finishes; compose
 // gives it stop_grace_period), so a data file is never left half-done.
 func Execute(cfg *config.Config, j config.Job, dryRun bool, out io.Writer) error {
+	return ExecuteWith(cfg, j, Options{DryRun: dryRun}, out)
+}
+
+// Options are manual-run overrides (kronos run): dry run, a fake clock, sandbox mode.
+type Options struct {
+	DryRun  bool
+	Now     time.Time // zero = real time
+	Sandbox bool      // paths point at a test folder (see job.Ctx.Sandbox)
+}
+
+// ExecuteWith is Execute with manual-run overrides.
+func ExecuteWith(cfg *config.Config, j config.Job, o Options, out io.Writer) error {
+	dryRun := o.DryRun
 	timeout := time.Duration(j.Timeout) * time.Second
 	if timeout <= 0 {
 		timeout = time.Duration(cfg.Settings.TimeoutSeconds) * time.Second // kronos.yml: settings.timeout_seconds (per job: jobs.<name>.timeout)
@@ -43,6 +57,10 @@ func Execute(cfg *config.Config, j config.Job, dryRun bool, out io.Writer) error
 	}
 
 	c := job.NewCtx(ctx, cfg, j, dryRun, out)
+	if !o.Now.IsZero() { // --now: test time-of-day rules
+		c.Now, c.Today = o.Now, dates.Today(o.Now)
+	}
+	c.Sandbox = o.Sandbox
 	done := make(chan error, 1)
 	go func() {
 		defer func() {

@@ -16,4 +16,5 @@
 // disagree, so a half-removed job is caught by `go test`.
 //
 // Code shared by several jobs lives in helpers.go; nothing job-specific goes there.
+// Pulse's two jobs share pulse.go, and their rules live in internal/pulse.
 package jobs

@@ -1,7 +1,7 @@
 # Kronos — Architecture (internal)
 
 > Internal reference for the Nimory homelab. Share this file (plus only the files being changed) instead of the full source.
-> Contains no secret values — only names and paths. Last reviewed: 2026-10-20 (v1.0.0, replaces Taskmaster).
+> Contains no secret values — only names and paths. Last reviewed: 2026-10-24 (v1.1.1: Pulse test tooling).
 
 ---
 
@@ -45,7 +45,7 @@ CI (`.gitlab-ci.yml`): `gofmt -l` must be empty, `go mod verify`, `go vet`, `go 
 ## 3. Code map
 
 ```
-cmd/kronos/main.go       CLI: serve | run <job> [--dry-run] | list | next [n] | health | jobs | notify | version
+cmd/kronos/              CLI: serve | run <job> [--dry-run] [--now] [--rahi-path] | pulse-fixture | list | next [n] | health | jobs | notify | version
 internal/config/         kronos.yml → Config{Paths, Settings, Jobs(ordered)}; default paths; Job.Int/String/Bool/Strings(options)
 internal/scheduler/      scheduler.go: kinds, queue, catch-up, watches, daemons · run.go: Execute (timeout, panic), command jobs, Alert
 internal/job/            Register/Lookup/Names, Ctx (paths, options, file ops, Notify, DryRun), Logger, Diff
@@ -54,6 +54,7 @@ internal/store/          YAML as yaml.Node records: LoadMapping/LoadRecords/Reco
                          DateOf/IntOf/Field/Equals/Truthy; PyStr/PyRepr/PyFloat/PyHTMLEscape; AtomicWrite(Perm), UniquePath
 internal/dates/          ParseISO/ParseTimestamp, AddMonths/AddYears (anchor), ParseRule/Advance/RollForward, AnchorDay
 internal/outbox/         Write(dir, source, kind, title, text) — producer side of Omnimo's contract
+internal/pulse/          Pulse rules (pure: reads files, jobs write) · fixture/: fake Rahi logs for tests
 internal/state/          Load, Record(path, job, started, duration, err) — atomic JSON
 ```
 
@@ -96,7 +97,9 @@ Dependencies: `gopkg.in/yaml.v3` (via its GitHub mirror — `replace` in go.mod,
 | 02:45 + watch | `health_website` | `health.md` | `<paths.health_site>/index.html` | — |
 | 03:00 | `daily_update` | events, subscriptions, calendar | `inbox/daily.md` | `upcoming_days` (7) |
 | 03:30 1 Jan | `archive_rollover` | `archive/*` | `archive/<year-1>/` | — |
-| 05:40 | `nimo_briefing` | `inbox/daily.md` | outbox briefing | — |
+| 05:40 | `nimo_briefing` | `inbox/daily.md`, `logs/rahi/state/brief.yml` | outbox briefing (+ Pulse block) | — |
+| */30 08–22 | `pulse_watch` | today's `logs/rahi/daily/…`, goals, baseline, sent, inbox/read | intraday snapshot, inbox nudges, sent | — |
+| :05 hourly | `pulse_rollup` | final `logs/rahi/daily/…` (70 days), goals | baseline, weekly/monthly, brief, warnings/reports (outbox + inbox), sent | `briefing_at` (05:40) |
 
 Paths relative to `/data/notes/`. Real paths come from `paths:` in kronos.yml (defaults in `internal/config`; the code default for `health_site` is generic, the server's kronos.yml sets the real domain).
 
@@ -204,6 +207,22 @@ A subscription is drafted when its `sub-…` event (created by `subscription_upd
 
 ---
 
+### Pulse (`logs/rahi/`, package `internal/pulse`)
+
+Rahi is the only writer of `daily/YYYYMMDD.md` (YAML; `final: true` once closed — Rahi 0.0.5 waits for a health read, forced at 12:00 next day). Kronos never writes there. Parsing keeps null as *missing*; `health_error` → steps/sleep missing; a tracked app absent from `apps:` on a day with screen data = 0 min (until Rahi logs every app ≥ 1 min).
+
+- **State:** `baseline.md` = `State{days_with_data, metrics{key: {weekday/weekend {median_7d, median_28d}, goal {start, current, missed_weeks, history}}}, rolled_days/weeks/months}`. Medians over the last 7/28 calendar days of the same day type, all days when fewer than 3. Recomputed every run as of the latest final day; written only when changed.
+- **Goals:** screen, `app:<pkg>` (lower better), steps, sleep (higher better). Start at the 28-day median once 7 days exist; weekly (Sunday final): week median meets → ×0.95 / ×1.05; 2 missed weeks → ×1.05 / ×0.95 capped at start; a goal started that week is not judged; always `Clamp` to `limits` (`app` = default for apps).
+- **Target:** yesterday worse than baseline → yesterday ×0.9 (×1.1 higher-better), but never stricter than the goal.
+- **Strikes:** over = >125% / <75% of the 28-day baseline; `Overs` = last 7 days ending at a day; pattern = 2/3 or 3/7. Warnings only for days ≤ 2 days old, one per metric per run and per 3 days.
+- **Watch:** snapshot (`at`, steps, screen_min, tracked apps) each run; observe-only before 7 days; app nudge = today > 7-day median ∧ pattern ∧ not backed off; steps nudge after `step_nudges.soft`/`.final` when steps + `StepsStillToCome` < target (median of final − steps-at-time over ≥ 14 goal days, else typical total × remaining waking share).
+- **Messages:** `Plan` sorts pattern > steps-final > app > steps-soft; cap = `max_messages_per_day` minus today's sent (reports and deferred excluded); quiet hours or no budget → nudges dropped, patterns deferred (`channel: briefing`, `for:` next briefing day). Inbox file = frontmatter `{id, title, from: Kronos, date, type}` + body. Back-off: last 3 read nudges of a type each dismissed or ended off target (turn-back = improvement) → every other day for 7 days.
+- **Reports:** latest weekly/monthly not yet sent, outside quiet hours: `notice` with plain numbers (`ReportText`) + short weekly inbox file. Omnimo prose: `docs/omnimo-report-kind.md`.
+- **Brief:** `state/brief.yml {date, lines}` rebuilt every run for today: yesterday (provisional until final) ✓/✗ per goal, "well off your usual", today's targets, deferred warnings; `nimo_briefing` appends it as `# Pulse`.
+- **Testing:** `kronos pulse-fixture` (package `internal/pulse/fixture`) writes marshalled fake logs + snapshots + `goals.md` into a folder marked `.pulse-fixture` (`--force` wipes only such a folder). `kronos run pulse_* --rahi-path DIR` sets `paths.rahi`=DIR, `paths.outbox`=DIR/_outbox, no log file, no `state.Record`, `Ctx.Sandbox`; `--now` sets `Ctx.Now/Today` (`scheduler.ExecuteWith`; real data needs `--dry-run`). Dry run: `pulseDeliver` prints `[p<priority>|report] channel id — title` and records to sent; `pulseWrite` writes Pulse's own files only when `Sandbox`.
+
+---
+
 ## 7. Outbox, and no locks
 
 **Outbox** — producer side of Omnimo's "Outbox contract": `<dir>/<unix-ns>-<kind>.json`, written as `.json.tmp` then renamed. JSON v1: `{version:1, kind: notice|alert|briefing, source:"kronos", title?, text (trimmed, non-empty), created: RFC3339}`. Dir: `/data/notes/data/outbox` (= Omnimo's `outbox.dir`). Must be writable by UID 1000.
@@ -243,7 +262,7 @@ Remove a job: delete `<name>.go` + `<name>_test.go` and its `kronos.yml.example`
 
 ## 10. Tests
 
-`go test ./...` (also in `docker build`): dates (Python-equal rules, anchor), store (error messages, round-trip order, PyStr/PyFloat/escape, UniquePath), outbox (contract), jobs (anchor drift, no anchor for ordinary days, legacy normalisation, broken file never overwritten, dry run writes nothing, missed-day subscription event + idempotency, calendar sync (fake Google: categories incl. festival/anniversary/reservation/override, times, multi-day, cancelled, sort, file kept on failure), agenda from calendar.md, partial agenda, arthik drafts window/dedupe/prune, registry = kronos.yml.example), scheduler (ok/fail/panic/timeout, command env/exit/stderr/timeout, bad jobs skipped + alerted, catch-up order and rules, Prev, watch debounce).
+`go test ./...` (also in `docker build`): dates (Python-equal rules, anchor), store (error messages, round-trip order, PyStr/PyFloat/escape, UniquePath), outbox (contract), jobs (anchor drift, no anchor for ordinary days, legacy normalisation, broken file never overwritten, dry run writes nothing, missed-day subscription event + idempotency, calendar sync (fake Google: categories incl. festival/anniversary/reservation/override, times, multi-day, cancelled, sort, file kept on failure), agenda from calendar.md, partial agenda, arthik drafts window/dedupe/prune, pulse (parse/nulls, medians, over/pattern, goal tighten/loosen/clamp, target, step forecast, plan/cap/quiet/defer, read feedback + back-off, rollup/report; jobs: goals start, warning once + defer, weekly report, observe-only, app/step nudges, bad log tolerated, daily/ untouched, dry run prints + writes only in a sandbox; fixture patterns/determinism/refuses non-fixture folder; CLI test flags), registry = kronos.yml.example), scheduler (ok/fail/panic/timeout, command env/exit/stderr/timeout, bad jobs skipped + alerted, catch-up order and rules, Prev, watch debounce).
 
 ---
 

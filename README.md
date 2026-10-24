@@ -15,6 +15,8 @@ A small, modular **job scheduler** for a self-hosted homelab — one static Go b
 - [How it works](#how-it-works)
 - [Included jobs](#included-jobs)
 - [Data files](#data-files)
+- [Pulse — digital + health coach](#pulse--digital--health-coach)
+  - [Testing Pulse](#testing-pulse)
 - [Setup](#setup)
 - [Configuration](#configuration)
 - [Adding a job](#adding-a-job)
@@ -64,7 +66,9 @@ Any job can also have `watch: [files]`: it then runs again ~10–20 s after one 
 | `health_website` | daily 02:45 + on edit | Renders `health.md` into one static page in the nss look: classless, no JavaScript, dark/light by system. Adds a stats strip, pace per run, countdowns and a Daily activity section (steps, sleep, heart rate, calories charts) from `daily:` entries. |
 | `daily_update` | daily 03:00 | Writes the agenda: **Overdue**, **Due Today**, **Upcoming (7 days)** — events, subscriptions and `calendar.md` (lines start with the category, e.g. `BIRTHDAY- Asha`, `FESTIVAL- Karva Chauth`). |
 | `archive_rollover` | 1 Jan 03:30 | Moves loose archive files into a folder named after the previous year. |
-| `nimo_briefing` | daily 05:40 | Sends the agenda as a *briefing* — the bot posts it and adds an AI commentary. |
+| `nimo_briefing` | daily 05:40 | Sends the agenda as a *briefing* — the bot posts it and adds an AI commentary. With Pulse set up, its brief (yesterday's verdict, today's targets) is appended. |
+| `pulse_watch` | every 30 min, 08:00–22:30 | Pulse: snapshots today's Rahi log; nudges an app past its usual while on a strike pattern, and steps when you're unlikely to finish. |
+| `pulse_rollup` | hourly at :05 | Pulse: for each Rahi day that turned final — baselines, self-tightening goals, pattern warnings, weekly/monthly rollups and reports; refreshes the briefing part. |
 
 `kronos jobs` lists the built-in jobs; options per job are documented at the top of its file in `internal/jobs/`.
 
@@ -185,6 +189,91 @@ daily:                               # one entry per day (e.g. from a wearable);
 ```
 
 The Daily activity section charts the latest 30 entries; a chart with no values is left out.
+
+---
+
+## Pulse — digital + health coach
+
+Pulse reads the daily logs written by the **Rahi** launcher (`<rahi>/daily/YYYYMMDD.md`, never modified by Kronos) and coaches with deterministic rules — no AI decides anything.
+
+| File (under `paths.rahi`) | Written by | What |
+|---|---|---|
+| `goals.md` | you (Kronos creates a commented default once) | hard limits, `tracked_apps`, quiet hours, daily message cap, step-nudge times |
+| `baseline.md` | `pulse_rollup` | 7/28-day medians (weekday and weekend apart), goals with their history, what is rolled up |
+| `state/intraday-YYYYMMDD.yml` | `pulse_watch` | one snapshot per run (kept 90 days) — the step forecast learns from them |
+| `state/sent.yml` | both | every message: dedup, daily cap, feedback (90 days) |
+| `state/brief.yml` | `pulse_rollup` | the Pulse part of today's morning briefing |
+| `weekly/YYYY-Www.md`, `monthly/YYYYMM.md` | `pulse_rollup` | averages, medians, best/worst day, goal days, per-app totals, strikes, goal changes, unlocks |
+| `inbox/<id>.md` | both | nudges and the short weekly report on Rahi's home screen |
+
+**Rules**
+- **Missing ≠ 0:** null values and `health_error` days are left out. Pulse only observes until 7 days are logged.
+- **Goals:** screen time, each tracked app, steps, sleep. Each starts at your 28-day median. A week whose median meets the goal tightens it 5%; two missed weeks in a row loosen it 5% (never past the start). Goals always stay within `limits`.
+- **Today's target:** after a day worse than your baseline, yesterday ∓10% — never stricter than the goal.
+- **Strikes:** a day is *over* at >125% of baseline (<75% for steps and sleep). One over day is mentioned in the briefing; 2 of the last 3 or 3 of the last 7 is a Telegram warning (once per metric per 3 days).
+- **Nudges** (Rahi inbox):
+  - an app past its 7-day median while on a strike pattern — once per app per day;
+  - steps when you're unlikely to finish — at most a soft and a final nudge, silent once reached. The forecast spreads your usual total over waking hours until 14 goal days of snapshots exist, then uses what you typically walk after that time of day.
+- **Budget:** `max_messages_per_day` (reports excluded) and no messages in quiet hours. A pattern warning is never dropped; it moves to the next briefing.
+- **Feedback:** if the last 3 nudges of a kind were dismissed (✓ without opening) or the day still ended off target, that kind backs off to every other day for a week. A mindful turn-back counts as improvement.
+- **Reports:** weekly (when Sunday is final) to Telegram plus a short version in the inbox; monthly to Telegram. They are plain numbers until Omnimo can write prose from the rollup (see `docs/omnimo-report-kind.md`).
+
+Message ids are deterministic (`nudge-instagram-20261024`, `steps-final-20261024`, `pattern-screen-time-20261023`, `report-weekly-2026-W43`), so reruns never duplicate. A log Rahi is still writing is skipped with a warning and read again on the next run.
+
+### Testing Pulse
+
+Build a sandbox of fake Rahi logs, then run the Pulse jobs against it at any time of day. Your vault, Telegram, `paths.logs` and Kronos state are never touched. Inside the container use `docker exec kronos kronos …` and a folder under `/tmp` (a 16 MB scratch space, cleared on restart).
+
+**1. Fake logs** — 35 final days before `--today`, plus intraday step snapshots (every 30 min, 08:00–22:30) for each day with health data, and a `goals.md` tracking Instagram and YouTube:
+
+```sh
+kronos pulse-fixture --out /tmp/pulse --today 2026-11-30 \
+  --today-at 19:00 --today-steps 3000 \
+  --heavy 10 \
+  --streak com.google.android.youtube:3 \
+  --null-health 15,16 --health-error 20 \
+  --missing-app com.instagram.android:5
+```
+
+| Option | Pattern |
+|---|---|
+| `--days N` | number of final days (default 35); weekdays and weekends differ |
+| `--today-at HH:MM`, `--today-steps N` | a partial (non-final) log for `--today`, for `pulse_watch` |
+| `--heavy N` | one-off heavy day N days ago: lots of Instagram/YouTube, few steps, short sleep |
+| `--streak pkg:N` | the app well over its usual for the last N days (continues in today's partial log) |
+| `--null-health 15,16` | `health: null` on those days (missing, never 0) |
+| `--health-error 20` | `health_error` set; the stale health values must be ignored |
+| `--missing-app pkg:N` | the app absent from `apps:` for the last N days (counts as 0) |
+| `--tracked a,b`, `--seed N`, `--force` | tracked apps, another random variation (same seed = same logs), replace an earlier fixture |
+
+Day numbers count back from `--today` (1 = yesterday). `--force` only wipes a folder that has the fixture's `.pulse-fixture` marker, never your vault.
+
+**2. Run the jobs** with a fake clock:
+
+```sh
+# morning rollup: baselines, goals, weekly/monthly, pattern warnings, brief
+kronos run pulse_rollup --rahi-path /tmp/pulse --now '2026-11-30 09:05' --dry-run
+
+# nudges through the day: soft steps after 16:00, final after 20:30, quiet from 22:30
+kronos run pulse_watch --rahi-path /tmp/pulse --now '2026-11-30 16:30' --dry-run
+kronos run pulse_watch --rahi-path /tmp/pulse --now '2026-11-30 20:45' --dry-run
+kronos run pulse_watch --rahi-path /tmp/pulse --now '2026-11-30 23:00' --dry-run
+```
+
+| Flag | Effect |
+|---|---|
+| `--rahi-path DIR` | read and write the sandbox instead of `paths.rahi` (pulse_* jobs only). Telegram messages go to `DIR/_outbox/`, logs to the screen only |
+| `--now 'YYYY-MM-DD HH:MM'` | pretend it is that local time — for quiet hours, step-nudge times and `briefing_at`. On real data it needs `--dry-run` |
+| `--dry-run` | print each message instead of sending it: `~ would send [p1] inbox steps-final-20261130 — title`, then the text. `[p0]`…`[p3]` is the priority (pattern, steps-final, app, steps-soft); `[report]` is outside the daily cap |
+
+In a sandbox, a dry run still writes `baseline.md`, `weekly/`, `monthly/`, `state/` (snapshots, `brief.yml`, `sent.yml`), so later runs see earlier ones — dedup, the daily cap and back-off behave as they would for real. Without `--dry-run` the inbox files are written too (`DIR/inbox/`), and Telegram notices land in `DIR/_outbox/`. Start over with `--force` or by deleting the folder.
+
+Check the results:
+
+```sh
+cat /tmp/pulse/baseline.md /tmp/pulse/state/brief.yml
+ls /tmp/pulse/weekly /tmp/pulse/monthly /tmp/pulse/inbox
+```
 
 ---
 
@@ -333,6 +422,8 @@ Run inside the container (`docker exec kronos kronos …`):
 
 ```
 kronos run <job> [--dry-run]    run a job now; --dry-run prints the diff and changes nothing
+     [--now 'YYYY-MM-DD HH:MM'] [--rahi-path DIR]   test Pulse (see Testing Pulse)
+kronos pulse-fixture --out DIR  fake Rahi logs for testing Pulse (--help for patterns)
 kronos list                     jobs, schedule, next run, last run, status
 kronos next [n]                 the next n scheduled runs
 kronos health                   PASS/FAIL per job (failed or missed run); exit 1 on FAIL
@@ -376,12 +467,14 @@ Levels: `START INFO OK SKIP WARN FAIL DAEMN`. Every `FAIL` is also queued as a T
 
 ```
 kronos/
-├── cmd/kronos/main.go          CLI: serve, run, list, next, health, notify
+├── cmd/kronos/                 CLI: serve, run, list, next, health, notify, pulse-fixture
 ├── internal/
 │   ├── config/                 kronos.yml
 │   ├── scheduler/              cron, startup, daemons, watches, catch-up, timeouts, alerts
 │   ├── job/                    Register(), Ctx, logger, dry-run diff  ← the plug-in API
 │   ├── jobs/                   built-in jobs: <name>.go + <name>_test.go each (+ assets/health.css)
+│   ├── pulse/                  Pulse rules (baselines, goals, strikes, forecast, messages, rollups)
+│   │   └── fixture/            fake Rahi logs for testing (kronos pulse-fixture)
 │   ├── store/                  YAML records, atomic writes, Python-compatible formatting
 │   ├── dates/                  date parsing and repeat rules
 │   ├── outbox/                 Telegram hand-off (outbox folder)

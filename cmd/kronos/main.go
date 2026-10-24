@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -30,6 +31,9 @@ const usage = `kronos — Nimory's job scheduler
 Usage:
   kronos serve                       run the scheduler (the container's main process)
   kronos run <job> [--dry-run]       run one job now; --dry-run prints what would change
+             [--now 'YYYY-MM-DD HH:MM']   pretend it is this time (needs --dry-run or --rahi-path)
+             [--rahi-path DIR]            Pulse jobs only: use a test folder instead of paths.rahi
+  kronos pulse-fixture --out DIR [...]   write fake Rahi logs for testing Pulse (--help for options)
   kronos list                        jobs, schedules, next and last runs
   kronos next [n]                    the next n scheduled runs (default 10)
   kronos health                      PASS/FAIL per job; exit 1 if any job failed or missed a run
@@ -61,6 +65,8 @@ func main() {
 	case "help", "-h", "--help":
 		fmt.Println(usage)
 		return
+	case "pulse-fixture": // no kronos.yml needed
+		os.Exit(pulseFixture(args))
 	}
 
 	cfg, err := config.Load(config.Path())
@@ -102,6 +108,8 @@ func serve(cfg *config.Config) {
 func runJob(cfg *config.Config, args []string) int {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	dry := fs.Bool("dry-run", false, "print what would change without changing anything")
+	nowFlag := fs.String("now", "", "pretend it is this local time: 'YYYY-MM-DD HH:MM'")
+	rahi := fs.String("rahi-path", "", "Pulse test folder used instead of paths.rahi")
 	name, rest := "", args
 	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
 		name, rest = rest[0], rest[1:]
@@ -111,9 +119,15 @@ func runJob(cfg *config.Config, args []string) int {
 		name = fs.Arg(0)
 	}
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "Usage: kronos run <job> [--dry-run]")
+		fmt.Fprintln(os.Stderr, "Usage: kronos run <job> [--dry-run] [--now 'YYYY-MM-DD HH:MM'] [--rahi-path DIR]")
 		return 2
 	}
+	opt, err := testOptions(cfg, name, *dry, *nowFlag, *rahi)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "kronos:", err)
+		return 2
+	}
+	test := !opt.Now.IsZero() || opt.Sandbox // never touches the real log or state
 
 	j, ok := cfg.Job(name)
 	if !ok {
@@ -125,16 +139,23 @@ func runJob(cfg *config.Config, args []string) int {
 	}
 
 	logDir := cfg.Paths["logs"] // kronos.yml: paths.logs
-	if *dry {
+	switch {
+	case opt.Sandbox:
+		logDir = ""
+		fmt.Printf("Test run of %s in %s (Telegram → %s)\n", name, *rahi, cfg.Paths["outbox"])
+	case *dry:
 		logDir = ""
 		fmt.Printf("Dry run of %s — nothing will be changed.\n", name)
+	}
+	if !opt.Now.IsZero() {
+		fmt.Printf("Clock set to %s\n", opt.Now.Format("Mon 2006-01-02 15:04"))
 	}
 	logger := job.NewLogger(name, logDir, os.Stdout)
 	logger.Start("%s (manual)", j.Description)
 
 	started := time.Now()
-	err := scheduler.Execute(cfg, j, *dry, os.Stdout)
-	if !*dry {
+	err = scheduler.ExecuteWith(cfg, j, opt, os.Stdout)
+	if !*dry && !test {
 		if recErr := state.Record(cfg.Paths["state"], name, started, time.Since(started), err); recErr != nil {
 			logger.Warn("State not saved: %v", recErr)
 		}
@@ -145,6 +166,36 @@ func runJob(cfg *config.Config, args []string) int {
 	}
 	logger.OK("Completed")
 	return 0
+}
+
+// testOptions turns the test flags into run options. --rahi-path points paths.rahi at a
+// sandbox and moves the outbox and logs there too, so nothing reaches Telegram or your logs.
+func testOptions(cfg *config.Config, name string, dry bool, now, rahi string) (scheduler.Options, error) {
+	o := scheduler.Options{DryRun: dry}
+	if rahi != "" {
+		if !strings.HasPrefix(name, "pulse_") {
+			return o, fmt.Errorf("--rahi-path is for the pulse_* jobs (other jobs would still touch real paths)")
+		}
+		abs, err := filepath.Abs(rahi)
+		if err != nil {
+			return o, err
+		}
+		cfg.Paths["rahi"] = abs
+		cfg.Paths["outbox"] = filepath.Join(abs, "_outbox")
+		cfg.Paths["logs"] = ""
+		o.Sandbox = true
+	}
+	if now != "" {
+		t, err := time.ParseInLocation("2006-01-02 15:04", now, time.Local)
+		if err != nil {
+			return o, fmt.Errorf("--now %q: want 'YYYY-MM-DD HH:MM'", now)
+		}
+		if !dry && !o.Sandbox {
+			return o, fmt.Errorf("--now on real data needs --dry-run (or use --rahi-path)")
+		}
+		o.Now = t
+	}
+	return o, nil
 }
 
 func list(cfg *config.Config, out io.Writer) {

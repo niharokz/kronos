@@ -31,6 +31,7 @@ paths:
   archive: /data/notes/archive
   daily: /data/notes/inbox/daily.md
   finance_inbox: /data/notes/data/finance/inbox  # Arthik's inbox: Kronos writes kronos.md there
+  rahi: /data/notes/logs/rahi                    # Rahi folder: Pulse reads daily/, writes baseline/state/weekly/monthly/inbox
   health_site: /docker/web/health
   google_token: /app/config/token.json
   # Every path is also given to command jobs as KRONOS_<NAME> (e.g. KRONOS_EVENTS).
@@ -105,6 +106,17 @@ jobs:
   archive_rollover:
     schedule: "30 3 1 1 *"
     description: "Move archive files into previous year's folder."
+
+  # Pulse: snapshot today's Rahi log, nudge apps over their usual and steps unlikely to finish
+  pulse_watch:
+    schedule: "*/30 8-22 * * *"
+    description: "Pulse: intraday snapshot and nudges."
+
+  # Pulse: process final days — baselines, goals, warnings, weekly/monthly rollups, briefing part
+  pulse_rollup:
+    schedule: "5 * * * *"
+    description: "Pulse: baselines, goals and rollups from final Rahi days."
+    # options: { briefing_at: '05:40' }
 
   # Morning briefing: agenda goes to Omnimo, which adds Nimo's commentary
   nimo_briefing:

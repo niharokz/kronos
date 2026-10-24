@@ -4,8 +4,8 @@ services:
     build:
       context: .
       args:
-        VERSION: "1.0.0"
-    image: kronos:1.0.0
+        VERSION: "1.1.1"
+    image: kronos:1.1.1
     container_name: kronos
     restart: unless-stopped
     init: true                                      # proper PID 1 for script jobs (signals, zombie reaping)
