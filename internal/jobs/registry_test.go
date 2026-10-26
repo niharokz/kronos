@@ -8,6 +8,7 @@ import (
 
 	"gitlab.com/niharokz/kronos/internal/config"
 	"gitlab.com/niharokz/kronos/internal/job"
+	_ "gitlab.com/niharokz/kronos/internal/watch" // monitors are listed in the example too
 )
 
 // kronos.yml.example is the list of built-in jobs: adding or removing a job

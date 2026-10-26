@@ -17,6 +17,7 @@ A small, modular **job scheduler** for a self-hosted homelab — one static Go b
 - [Data files](#data-files)
 - [Pulse — digital + health coach](#pulse--digital--health-coach)
   - [Testing Pulse](#testing-pulse)
+- [Monitors — watch_*](#monitors--watch_)
 - [Setup](#setup)
 - [Configuration](#configuration)
 - [Adding a job](#adding-a-job)
@@ -45,6 +46,7 @@ Any job can also have `watch: [files]`: it then runs again ~10–20 s after one 
 - Jobs run **one at a time**, in the order they become due; jobs due in the same minute run in `kronos.yml` order.
 - A job's next run is computed from when it **finished**, so a long run skips a slot instead of piling up.
 - **Catch-up:** if the host was off when a job was due, Kronos runs the missed slot once when it starts (within `catch_up_hours`, default 48), in slot order. Opt out per job with `catch_up: false`.
+- **Skip if busy:** a cron job with `skip_if_busy: true` skips its slot (instead of waiting) when another job is running or queued. Its next run is the next slot.
 - Every run has a **timeout** (default 15 min). Go jobs are abandoned, command jobs are killed.
 - A failing run (error, panic, timeout, non-zero exit) is logged as `FAIL` and sent as a Telegram **alert**.
 - On stop, the running job finishes first (compose gives it `stop_grace_period`), then daemons are stopped.
@@ -69,6 +71,9 @@ Any job can also have `watch: [files]`: it then runs again ~10–20 s after one 
 | `nimo_briefing` | daily 05:40 | Sends the agenda as a *briefing* — the bot posts it and adds an AI commentary. With Pulse set up, its brief (yesterday's verdict, today's targets) is appended. |
 | `pulse_watch` | every 30 min, 08:00–22:30 | Pulse: snapshots today's Rahi log; nudges an app past its usual while on a strike pattern, and steps when you're unlikely to finish. |
 | `pulse_rollup` | hourly at :05 | Pulse: for each Rahi day that turned final — baselines, self-tightening goals, pattern warnings, weekly/monthly rollups and reports; refreshes the briefing part. |
+| `watch_rewards` | hourly at :17, skipped when busy | Monitor: new items and points changes in the public Microsoft Rewards (India) catalog. |
+| `watch_domains` | daily 11:20 | Monitor: cheapest registrar per TLD (default `.ar`, transfer + 1st renewal). |
+| `watch_gold` | daily 11:15 | Monitor: gold rate per gram (default 22K, Bangalore). |
 
 `kronos jobs` lists the built-in jobs; options per job are documented at the top of its file in `internal/jobs/`.
 
@@ -277,6 +282,53 @@ ls /tmp/pulse/weekly /tmp/pulse/monthly /tmp/pulse/inbox
 
 ---
 
+## Monitors — watch_*
+
+Monitors check something outside the homelab and tell you **only when it changes**. They live apart from the other jobs: code in `internal/watch/` (one file per monitor), state in `paths.watch` (default `/data/notes/logs/watch`), a `watch_<name>` entry in `kronos.yml`. Switch one off with `enabled: false`.
+
+| Monitor | Source | Stored in `<watch>/` | Tells you when |
+|---|---|---|---|
+| `watch_rewards` | rewards.bing.com/redeem/in (public pages) | `rewards.yml` | a new item appears, or an item's points change (removals optional) |
+| `watch_domains` | domainoffer.net, tld-list.com | `domains.yml` | the cheapest registrar or its prices change |
+| `watch_gold` | cleartax.in/gold-rate-&lt;city&gt; | `gold.yml` | the rate per gram differs from the stored one |
+
+**How every monitor behaves**
+- **First run** stores the current values as a baseline and sends one "now watching" message.
+- **Same values → nothing.** The state file is not rewritten and nothing is sent. A change in details that don't matter (a Rewards item's text) is stored silently.
+- **A change** is stored and sent to each channel in `notify:` — `telegram` (via Omnimo) and/or `rahi` (a message in `<paths.rahi>/inbox/`, id `watch-<name>-YYYYMMDDHHMM`).
+- **Failures:** a failed check is a warning; `fail_after` failures in a row (default 3) give one FAIL + alert; the next success logs "working again". A Rewards page that fails keeps its old items; an empty or blocked page never replaces good values.
+- **Dry run:** `kronos run watch_<name> --dry-run` fetches and prints the current values and what it would send. Nothing is stored or sent, failures aren't counted.
+
+**Options** (under `options:` of the job; all optional)
+
+| Monitor | Option | Default | |
+|---|---|---|---|
+| all | `notify` | rewards `[telegram]`, others `[telegram, rahi]` | where changes go |
+| all | `fail_after` | `3` | failed checks in a row before one alert |
+| all | `timeout_s` | `30` | per request (one retry on a network error or 5xx) |
+| rewards | `market` | `in` | `/redeem/<market>/…` |
+| rewards | `pages` | `[featured, giftcards, donate, sweepstakes]` | catalog tabs to read |
+| rewards | `notify_price` / `notify_removed` | `true` / `false` | also tell about points changes / removed items |
+| domains | `tlds` | `[ar]` | TLDs, without the dot |
+| domains | `rank_by` | `total` | `total` (transfer + 1st renewal), `transfer`, `renew`, `register` |
+| domains | `top` | `1` | registrars kept per TLD |
+| domains | `sources` / `max_pages` | `[domainoffer, tld-list]` / `5` | drop `tld-list` if it keeps returning 403 |
+| gold | `city` / `karat` | `bangalore` / `22` | `{city}` in `url`, `{karat}` in `pattern` |
+| gold | `url` | `https://cleartax.in/gold-rate-{city}` | page to read |
+| gold | `pattern` | `₹\s*([\d,]+(?:\.\d+)?)\s*per gram for {karat}\s*K gold` | regex on the page text; group 1 = rate. Another site = new `url` + `pattern` |
+
+**Try them** (inside the container):
+
+```sh
+docker exec kronos kronos run watch_gold --dry-run
+docker exec kronos kronos run watch_domains --dry-run
+docker exec kronos kronos run watch_rewards --dry-run
+```
+
+**Add a monitor:** copy `internal/watch/gold.go` (+ its test) to `<name>.go`, give it a `Watcher` with `Fetch` (current values), `Show` and `Diff` (what is worth telling; `""` for nothing), add `watch_<name>` to `kronos.yml.example` and `kronos.yml`, rebuild. Storing, comparing, notifying, failure counting and dry runs come from `internal/watch/watch.go`.
+
+---
+
 ## Setup
 
 1. **Clone and configure**
@@ -343,6 +395,7 @@ jobs:
     description: "Update events."
     timeout: 300              # optional per-job override
     catch_up: true            # optional (default true)
+    skip_if_busy: false       # optional: skip the slot while another job runs
     enabled: true             # optional (default true)
     watch: [/data/notes/data/event.md]   # optional
     options: { purge_after_days: 365 }  # job-specific settings
@@ -474,6 +527,7 @@ kronos/
 │   ├── job/                    Register(), Ctx, logger, dry-run diff  ← the plug-in API
 │   ├── jobs/                   built-in jobs: <name>.go + <name>_test.go each (+ assets/health.css)
 │   ├── pulse/                  Pulse rules (baselines, goals, strikes, forecast, messages, rollups)
+│   ├── watch/                  monitors: engine (watch.go, client.go) + one file per watch_<name>
 │   │   └── fixture/            fake Rahi logs for testing (kronos pulse-fixture)
 │   ├── store/                  YAML records, atomic writes, Python-compatible formatting
 │   ├── dates/                  date parsing and repeat rules

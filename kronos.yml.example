@@ -14,6 +14,7 @@
 #   enabled:     false to switch a job off without deleting it
 #   timeout:     seconds before the run is abandoned/killed (default settings.timeout_seconds)
 #   catch_up:    false to NOT run a missed slot after downtime (default true)
+#   skip_if_busy: true to skip a slot (not wait) while another job is running
 #   watch:       [files] — also run ~10–20 s after any of them changes
 #   command:     [program, args...] — run this instead of a built-in Go job
 #   options:     job-specific settings (see each job's file)
@@ -32,6 +33,7 @@ paths:
   daily: /data/notes/inbox/daily.md
   finance_inbox: /data/notes/data/finance/inbox  # Arthik's inbox: Kronos writes kronos.md there
   rahi: /data/notes/logs/rahi                    # Rahi folder: Pulse reads daily/, writes baseline/state/weekly/monthly/inbox
+  watch: /data/notes/logs/watch                  # monitors (watch_*): last values, failure counts
   health_site: /docker/web/health
   google_token: /app/config/token.json
   # Every path is also given to command jobs as KRONOS_<NAME> (e.g. KRONOS_EVENTS).
@@ -123,6 +125,40 @@ jobs:
     schedule: "40 5 * * *"
     description: "Queue daily agenda as an Omnimo briefing."
 
+
+  # ── Monitors (internal/watch): external sites, told only when something changes ──
+  # State: paths.watch/<name>.yml (rewritten only on change). Common options:
+  #   notify: [telegram, rahi]   where changes go (Telegram via Omnimo; Rahi inbox)
+  #   fail_after: 3              failed checks in a row before one alert
+  #   timeout_s: 30              per request
+  # Test without storing or sending: kronos run watch_<name> --dry-run
+
+  # New items / points changes in the public Microsoft Rewards (India) catalog
+  watch_rewards:
+    schedule: "17 * * * *"          # :17 — clear of pulse_watch (:00/:30) and pulse_rollup (:05)
+    skip_if_busy: true
+    catch_up: false
+    timeout: 300
+    description: "Watch: Microsoft Rewards catalog."
+    # options: { market: in, pages: [featured, giftcards, donate, sweepstakes], notify_price: true, notify_removed: false, notify: [telegram] }
+
+  # Cheapest registrar per TLD (transfer + 1st renewal)
+  watch_domains:
+    schedule: "20 11 * * *"
+    catch_up: false
+    timeout: 300
+    description: "Watch: domain prices."
+    options: { tlds: [ar], rank_by: total, top: 1 }
+    # more options: { sources: [domainoffer, tld-list], max_pages: 5, notify: [telegram, rahi] }
+
+  # Gold rate per gram (any city / purity; another site via url + pattern)
+  watch_gold:
+    schedule: "15 11 * * *"
+    catch_up: false
+    timeout: 120
+    description: "Watch: gold rate."
+    options: { city: bangalore, karat: 22 }
+    # more options: { url: 'https://cleartax.in/gold-rate-{city}', pattern: '₹\s*([\d,]+(?:\.\d+)?)\s*per gram for {karat}\s*K gold', notify: [telegram, rahi] }
 
   # ── Example script job (no rebuild needed) ──
   # disk_check:

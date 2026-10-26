@@ -183,3 +183,24 @@ func TestWatchTriggersAfterQuietPeriod(t *testing.T) {
 		t.Errorf("reason = %q", r.reason)
 	}
 }
+
+// skip_if_busy: a due slot is skipped (not queued) while another job runs; otherwise it queues.
+func TestSkipIfBusy(t *testing.T) {
+	cfg, _ := testConfig(t, "  test_ok: {schedule: '0 * * * *', skip_if_busy: true}\n")
+	var out bytes.Buffer
+	s := New(cfg, &out)
+	tk := s.tasks[0]
+	now := time.Date(2026, 10, 26, 10, 0, 0, 0, time.Local)
+	tk.next = now
+	s.running = true
+	s.enqueueDue(now)
+	if len(s.queue) != 0 || !tk.next.Equal(now.Add(time.Hour)) || !strings.Contains(out.String(), "slot skipped") {
+		t.Fatalf("busy: queued=%d next=%v\n%s", len(s.queue), tk.next, out.String())
+	}
+	s.running = false
+	tk.next = now.Add(time.Hour)
+	s.enqueueDue(now.Add(time.Hour))
+	if len(s.queue) != 1 {
+		t.Fatal("idle: not queued")
+	}
+}

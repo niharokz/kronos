@@ -1,7 +1,7 @@
 # Kronos — Architecture (internal)
 
 > Internal reference for the Nimory homelab. Share this file (plus only the files being changed) instead of the full source.
-> Contains no secret values — only names and paths. Last reviewed: 2026-10-24 (v1.1.1: Pulse test tooling).
+> Contains no secret values — only names and paths. Last reviewed: 2026-10-26 (v1.1.2: monitors, skip_if_busy).
 
 ---
 
@@ -30,7 +30,7 @@ Host: a small Debian box with Docker Compose. Repo: `gitlab.com/niharokz/kronos`
 | User / hardening | `.env` `PUID:PGID` (image default `USER 1000:1000`), `init: true`, `read_only: true` + tmpfs `/tmp` (16 MB), `cap_drop: [ALL]`, `no-new-privileges`, `pids_limit: 256`, `mem_limit: 256m`, `stop_grace_period: 1m` |
 | TZ | `.env` `TZ` (default UTC); zone data is compiled in (`time/tzdata`), so it works on minimal images |
 | Volumes | `$NOTE_PATH → /data/notes` · `$WEB_PATH → /docker/web` · `./kronos.yml → /app/kronos.yml:ro` · `./config → /app/config` (rw: token refresh) · `./scripts → /app/scripts:ro` |
-| Network | default bridge (only `www.googleapis.com` (Calendar API) / `oauth2.googleapis.com` outbound); no ports |
+| Network | default bridge; outbound only: `www.googleapis.com` / `oauth2.googleapis.com` (Calendar API), and for monitors `rewards.bing.com`, `domainoffer.net`, `tld-list.com`, `cleartax.in` (or your `options.url`); no ports |
 | Secrets / host values | `.env` (gitignored, template `.env.example`): `DATA_PATH` (base), `NOTE_PATH` (`${DATA_PATH}/notes`), `WEB_PATH`, `PUID`, `PGID`, `TZ` — used only by compose, not passed into the container. Google OAuth in `./config/token.json` (+ `credentials.json`, only for regenerating) |
 | Ignored | `.gitignore`: `.env*` (except `.env.example`), `kronos.yml`, `config/*`, `scripts/*` (except `*.example`), `**/token.json`, `**/credentials.json`, `**/client_secret*.json`, build output, editor/OS files · `.dockerignore`: the same secrets + `.git`, CI file, docs |
 | Logs | stdout (json-file 10 MB × 3) + `/data/notes/logs/kronos/kronos_YYYYMM.log` |
@@ -55,6 +55,8 @@ internal/store/          YAML as yaml.Node records: LoadMapping/LoadRecords/Reco
 internal/dates/          ParseISO/ParseTimestamp, AddMonths/AddYears (anchor), ParseRule/Advance/RollForward, AnchorDay
 internal/outbox/         Write(dir, source, kind, title, text) — producer side of Omnimo's contract
 internal/pulse/          Pulse rules (pure: reads files, jobs write) · fixture/: fake Rahi logs for tests
+internal/watch/          monitors: watch.go (Watcher, Run: compare/store/notify/failures/dry run), client.go (HTTP + HTML text helpers),
+                         rewards.go, domains.go, gold.go — each registers watch_<name>
 internal/state/          Load, Record(path, job, started, duration, err) — atomic JSON
 ```
 
@@ -67,6 +69,7 @@ Dependencies: `gopkg.in/yaml.v3` (via its GitHub mirror — `replace` in go.mod,
 - **Kinds**: 5-field cron (robfig `ParseStandard`, local TZ) · `@startup` · `@daemon` · `@manual`. Invalid schedule or unknown job (no Go registration and no `command:`) → `FAIL` + alert at load, job skipped, others run.
 - **Queue**: one worker, strictly sequential. `busy` flag = never queued twice. Cron `next` is cleared on enqueue and recomputed from *finish* time (Taskmaster semantics: overruns skip slots).
 - **Startup order**: `@startup` jobs (config order) → catch-ups (slot order) → normal schedule.
+- **Skip if busy**: a cron job with `skip_if_busy: true` that comes due while the worker is running a job or the queue is not empty is not queued: `SKIP Another job is running – this slot skipped`, next = the next slot. (`watch_rewards` uses it.)
 - **Catch-up**: for cron jobs with `catch_up` (default true) that have a state entry, if the latest slot within `catch_up_hours` (48) is after `last_run`, run once with reason `catch-up for <slot>`. No state entry (never ran under Kronos) → no catch-up. A failed run counts as a run (no retry loops).
 - **Watch**: every tick, stat each watched file (size + mtime). Change → pending; unchanged for ≥ one tick → enqueue (`changed: <file>`). After any run of that job, its signatures are refreshed (its own writes never re-trigger it).
 - **Timeouts**: per job `timeout` or `settings.timeout_seconds` (900). Go job: `Execute` returns `Timed out … abandoned`, goroutine may finish in background. Command: SIGTERM, then kill after 10 s (`WaitDelay`).
@@ -100,6 +103,9 @@ Dependencies: `gopkg.in/yaml.v3` (via its GitHub mirror — `replace` in go.mod,
 | 05:40 | `nimo_briefing` | `inbox/daily.md`, `logs/rahi/state/brief.yml` | outbox briefing (+ Pulse block) | — |
 | */30 08–22 | `pulse_watch` | today's `logs/rahi/daily/…`, goals, baseline, sent, inbox/read | intraday snapshot, inbox nudges, sent | — |
 | :05 hourly | `pulse_rollup` | final `logs/rahi/daily/…` (70 days), goals | baseline, weekly/monthly, brief, warnings/reports (outbox + inbox), sent | `briefing_at` (05:40) |
+| :17 hourly (skip if busy) | `watch_rewards` | rewards.bing.com/redeem/in (+ /shop, /donate, /win) | `logs/watch/rewards.yml`, outbox on change | `market`, `pages`, `notify_price` (true), `notify_removed` (false), `notify` ([telegram]) |
+| 11:15 | `watch_gold` | cleartax.in/gold-rate-{city} | `logs/watch/gold.yml`, outbox + `logs/rahi/inbox` on change | `city` (bangalore), `karat` (22), `url`, `pattern`, `notify` |
+| 11:20 | `watch_domains` | domainoffer.net, tld-list.com | `logs/watch/domains.yml`, outbox + `logs/rahi/inbox` on change | `tlds` ([ar]), `rank_by` (total), `top` (1), `sources`, `max_pages` (5), `notify` |
 
 Paths relative to `/data/notes/`. Real paths come from `paths:` in kronos.yml (defaults in `internal/config`; the code default for `health_site` is generic, the server's kronos.yml sets the real domain).
 
@@ -221,6 +227,23 @@ Rahi is the only writer of `daily/YYYYMMDD.md` (YAML; `final: true` once closed 
 - **Brief:** `state/brief.yml {date, lines}` rebuilt every run for today: yesterday (provisional until final) ✓/✗ per goal, "well off your usual", today's targets, deferred warnings; `nimo_briefing` appends it as `# Pulse`.
 - **Testing:** `kronos pulse-fixture` (package `internal/pulse/fixture`) writes marshalled fake logs + snapshots + `goals.md` into a folder marked `.pulse-fixture` (`--force` wipes only such a folder). `kronos run pulse_* --rahi-path DIR` sets `paths.rahi`=DIR, `paths.outbox`=DIR/_outbox, no log file, no `state.Record`, `Ctx.Sandbox`; `--now` sets `Ctx.Now/Today` (`scheduler.ExecuteWith`; real data needs `--dry-run`). Dry run: `pulseDeliver` prints `[p<priority>|report] channel id — title` and records to sent; `pulseWrite` writes Pulse's own files only when `Sandbox`.
 
+### Monitors (`logs/watch/`, package `internal/watch`)
+
+Separate from the data jobs: own package, own folder, own `paths.watch`; the only shared pieces are the scheduler, the outbox and the Rahi inbox. Every monitor is a `Watcher[T]{Name, Title, Notify, Fetch, Show, Diff, Keep}` registered as job `watch_<Name>`; `Run` does the rest:
+
+1. `Fetch` → current value `T` (+ warnings = some source failed). An error → `failures.yml[name]++`; WARN, and exactly at `fail_after` (3) a FAIL + alert; the next success clears it (INFO "working again").
+2. **Dry run**: print `Show(cur)` and what would happen (first run / same / would notify + channels); no file, no message, no failure count.
+3. No state file → store `<watch>/<name>.yml` (`updated`, `data`), send "now watching" + `Show`.
+4. Warnings with a stored value: `Keep(old, cur)` if the monitor has one (rewards: union by SKU), else skip the run (a partial fetch is never a change).
+5. `data` equal (YAML form) → SKIP "No change", file untouched. Else store; `Diff(old, cur)` non-empty → send it; empty → stored silently (e.g. rewards text-only change).
+6. Send per `options.notify`: `telegram` → outbox `notice`, text = title + body (≤ 3800 chars); `rahi` → `<rahi>/inbox/watch-<name>-YYYYMMDDHHMM.md` (first run: `-start`), frontmatter `{id, title, from: Kronos, date, type: watch}` + body, `UniquePath` on a clash.
+
+HTTP: browser User-Agent, `timeout_s` (30) per request, one retry after 5 s on a network error or 5xx, bodies capped at 8 MB. HTML is read with small regex helpers (`Text`, `Attr`, `Number`) — no parser dependency; each monitor's test pins the page shape it expects, and `--dry-run` shows at once when a site changed its layout.
+
+- **rewards** (`Catalog{items: [{sku, title, points, category, desc}]}` sorted by SKU): cards = `<a href=…/redeem/sku/<id>>`; title = img alt, else heading, else text; points = `N pts|points`. Union across tabs (first tab wins the category). 0 pages loaded or 0 items → error (never an empty list).
+- **domains** (`Domains{rank_by, tlds: {ar: [{registrar, score, transfer, renew, register, link}]}}`): domainoffer `#domain-list` rows (ICANN-fee column skipped, `Next` → more pages) + tld-list table by header; registrar names merged by key (+ aliases); best quote per registrar; cheapest `top`. A failing source is a WARN, the other still counts; no prices for a TLD → error.
+- **gold** (`Gold{city, karat, per_gram}`): `pattern` (with `{karat}`) on the page's visible text; group 1 → number. Diff: `▲/▼ ₹d from ₹old (p%)`.
+
 ---
 
 ## 7. Outbox, and no locks
@@ -262,7 +285,7 @@ Remove a job: delete `<name>.go` + `<name>_test.go` and its `kronos.yml.example`
 
 ## 10. Tests
 
-`go test ./...` (also in `docker build`): dates (Python-equal rules, anchor), store (error messages, round-trip order, PyStr/PyFloat/escape, UniquePath), outbox (contract), jobs (anchor drift, no anchor for ordinary days, legacy normalisation, broken file never overwritten, dry run writes nothing, missed-day subscription event + idempotency, calendar sync (fake Google: categories incl. festival/anniversary/reservation/override, times, multi-day, cancelled, sort, file kept on failure), agenda from calendar.md, partial agenda, arthik drafts window/dedupe/prune, pulse (parse/nulls, medians, over/pattern, goal tighten/loosen/clamp, target, step forecast, plan/cap/quiet/defer, read feedback + back-off, rollup/report; jobs: goals start, warning once + defer, weekly report, observe-only, app/step nudges, bad log tolerated, daily/ untouched, dry run prints + writes only in a sandbox; fixture patterns/determinism/refuses non-fixture folder; CLI test flags), registry = kronos.yml.example), scheduler (ok/fail/panic/timeout, command env/exit/stderr/timeout, bad jobs skipped + alerted, catch-up order and rules, Prev, watch debounce).
+`go test ./...` (also in `docker build`): dates (Python-equal rules, anchor), store (error messages, round-trip order, PyStr/PyFloat/escape, UniquePath), outbox (contract), jobs (anchor drift, no anchor for ordinary days, legacy normalisation, broken file never overwritten, dry run writes nothing, missed-day subscription event + idempotency, calendar sync (fake Google: categories incl. festival/anniversary/reservation/override, times, multi-day, cancelled, sort, file kept on failure), agenda from calendar.md, partial agenda, arthik drafts window/dedupe/prune, pulse (parse/nulls, medians, over/pattern, goal tighten/loosen/clamp, target, step forecast, plan/cap/quiet/defer, read feedback + back-off, rollup/report; jobs: goals start, warning once + defer, weekly report, observe-only, app/step nudges, bad log tolerated, daily/ untouched, dry run prints + writes only in a sandbox; fixture patterns/determinism/refuses non-fixture folder; CLI test flags), registry = kronos.yml.example), scheduler (ok/fail/panic/timeout, command env/exit/stderr/timeout, bad jobs skipped + alerted, catch-up order and rules, Prev, watch debounce, skip_if_busy), watch (baseline + one message, same value → file untouched and no message, change → file + Telegram + Rahi inbox, notify option, dry run stores nothing, fail_after alert once + reset, partial fetch not stored; rewards cards/repeated title/points, text-only change silent, notify_price/notify_removed, partial merge; domainoffer/tld-list parsing, alias merge, total/transfer ranking, diff; gold pattern for 22K/24K, missing rate, diff, end-to-end dry run via options.url).
 
 ---
 

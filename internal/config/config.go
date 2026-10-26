@@ -35,14 +35,15 @@ type Settings struct {
 // Job is one entry under jobs:.
 type Job struct {
 	Name        string         `yaml:"-"`
-	Schedule    string         `yaml:"schedule"`    // cron (5 fields) | @startup | @daemon | @manual
-	Description string         `yaml:"description"` //
-	Enabled     *bool          `yaml:"enabled"`     // default true
-	Timeout     int            `yaml:"timeout"`     // seconds; 0 = settings.timeout_seconds
-	CatchUp     *bool          `yaml:"catch_up"`    // default true (cron jobs only)
-	Watch       []string       `yaml:"watch"`       // also run when any of these files change
-	Command     []string       `yaml:"command"`     // run a program instead of a built-in Go job
-	Options     map[string]any `yaml:"options"`     // job-specific settings, read with Ctx.Int/String/...
+	Schedule    string         `yaml:"schedule"`     // cron (5 fields) | @startup | @daemon | @manual
+	Description string         `yaml:"description"`  //
+	Enabled     *bool          `yaml:"enabled"`      // default true
+	Timeout     int            `yaml:"timeout"`      // seconds; 0 = settings.timeout_seconds
+	CatchUp     *bool          `yaml:"catch_up"`     // default true (cron jobs only)
+	SkipIfBusy  bool           `yaml:"skip_if_busy"` // cron: skip a slot while another job runs or waits
+	Watch       []string       `yaml:"watch"`        // also run when any of these files change
+	Command     []string       `yaml:"command"`      // run a program instead of a built-in Go job
+	Options     map[string]any `yaml:"options"`      // job-specific settings, read with Ctx.Int/String/...
 }
 
 // IsEnabled reports whether the job should be scheduled at all.
@@ -67,6 +68,7 @@ var defaultPaths = map[string]string{
 	"daily":         "/data/notes/inbox/daily.md",
 	"finance_inbox": "/data/notes/data/finance/inbox",
 	"rahi":          "/data/notes/logs/rahi",
+	"watch":         "/data/notes/logs/watch",
 	"health_site":   "/docker/web/health",
 	"google_token":  "/app/config/token.json",
 }
@@ -160,7 +162,7 @@ func Parse(raw []byte, file string) (*Config, error) {
 var (
 	topKeys      = keySet("paths", "settings", "jobs")
 	settingsKeys = keySet("tick_seconds", "timeout_seconds", "catch_up_hours", "alerts")
-	jobKeys      = keySet("schedule", "description", "enabled", "timeout", "catch_up", "watch", "command", "options")
+	jobKeys      = keySet("schedule", "description", "enabled", "timeout", "catch_up", "skip_if_busy", "watch", "command", "options")
 )
 
 func keySet(keys ...string) map[string]bool {

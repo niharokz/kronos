@@ -24,6 +24,7 @@ import (
 	"gitlab.com/niharokz/kronos/internal/outbox"
 	"gitlab.com/niharokz/kronos/internal/scheduler"
 	"gitlab.com/niharokz/kronos/internal/state"
+	_ "gitlab.com/niharokz/kronos/internal/watch" // registers the watch_* monitors
 )
 
 const usage = `kronos — Nimory's job scheduler

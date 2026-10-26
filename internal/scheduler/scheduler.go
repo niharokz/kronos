@@ -14,7 +14,8 @@
 // Taskmaster: a job's next run is computed from when it finished, so an
 // overrun skips a slot instead of piling up. On start, a cron job whose last
 // scheduled slot (within settings.catch_up_hours) was missed — the host was
-// off — runs once to catch up, in slot order.
+// off — runs once to catch up, in slot order. A job with skip_if_busy: true
+// skips a slot instead of waiting when another job is running or queued.
 package scheduler
 
 import (
@@ -113,8 +114,9 @@ type Scheduler struct {
 	out   io.Writer
 	tasks []*task
 
-	mu    sync.Mutex
-	queue chan request
+	mu      sync.Mutex
+	queue   chan request
+	running bool // the worker is executing a job
 }
 
 // New validates every job. A job with a bad schedule or no implementation
@@ -223,10 +225,25 @@ func (s *Scheduler) catchUp(now time.Time) {
 
 func (s *Scheduler) enqueueDue(now time.Time) {
 	for _, t := range s.tasks {
-		if t.kind == Cron && !t.next.IsZero() && !now.Before(t.next) {
-			s.enqueue(t, "")
+		if t.kind != Cron || t.next.IsZero() || now.Before(t.next) {
+			continue
 		}
+		if t.job.SkipIfBusy && s.busy() { // kronos.yml: jobs.<name>.skip_if_busy
+			s.mu.Lock()
+			t.next = t.sched.Next(now)
+			s.mu.Unlock()
+			job.NewLogger(t.job.Name, s.cfg.Paths["logs"], s.out).Skip("Another job is running – this slot skipped")
+			continue
+		}
+		s.enqueue(t, "")
 	}
+}
+
+// busy reports whether a job is running or waiting in the queue.
+func (s *Scheduler) busy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.running || len(s.queue) > 0
 }
 
 func (s *Scheduler) enqueue(t *task, reason string) {
@@ -248,8 +265,12 @@ func (s *Scheduler) worker(ctx context.Context, done chan<- struct{}) {
 		case <-ctx.Done():
 			return
 		case req := <-s.queue:
+			s.mu.Lock()
+			s.running = true
+			s.mu.Unlock()
 			s.execute(req.t, req.reason)
 			s.mu.Lock()
+			s.running = false
 			req.t.busy = false
 			if req.t.kind == Cron {
 				req.t.next = req.t.sched.Next(time.Now())
