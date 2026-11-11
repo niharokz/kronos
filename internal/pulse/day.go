@@ -1,5 +1,3 @@
-// Package pulse is the logic behind the pulse_* jobs: a digital + health coach
-// built on Rahi's daily logs. It only reads files; jobs do all writing.
 package pulse
 
 import (

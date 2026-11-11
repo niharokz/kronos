@@ -75,7 +75,7 @@ func healthWebsite(c *job.Ctx) error {
 
 	page := renderHealthPage(c.Today, meta, planned, recent, gym, daily)
 
-	out := c.Path("health_site") // kronos.yml: paths.health_site (under .env WEB_PATH)
+	out := c.Path("health_site") // kronos.yml: paths.health_site (.env KRONOS_HEALTH_SITE)
 	if err := c.MkdirAll(out); err != nil {
 		return err
 	}

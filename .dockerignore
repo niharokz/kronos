@@ -1,16 +1,25 @@
-# Keep secrets, personal config and repo clutter out of the build context
+# Build context = Go sources only: no secrets, personal config, docs or repo clutter
 .git
+.gitignore
+.gitattributes
 .gitlab-ci.yml
 .env
 .env.*
 kronos.yml
+kronos.yml.*
+!kronos.yml.example
 config/
 scripts/
 **/token.json
 **/credentials.json
 **/client_secret*.json
 *.md
+LICENSE
+docker-compose.yml
+Dockerfile
 .idea/
 .vscode/
 patch/
 patches/
+*.zip
+*.bak

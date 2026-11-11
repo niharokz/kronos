@@ -1,4 +1,4 @@
-package jobs
+package pulse
 
 import (
 	"fmt"
@@ -11,7 +11,6 @@ import (
 
 	"gitlab.com/niharokz/kronos/internal/dates"
 	"gitlab.com/niharokz/kronos/internal/job"
-	"gitlab.com/niharokz/kronos/internal/pulse"
 )
 
 // pulse_rollup processes every Rahi day that has turned final and isn't rolled up yet:
@@ -32,17 +31,17 @@ func pulseRollup(c *job.Ctx) error {
 		return nil
 	}
 	today, hhmm := c.Today, c.Now.Format("15:04")
-	st, err := pulse.LoadState(pulse.BaselineFile(dir))
+	st, err := LoadState(BaselineFile(dir))
 	if err != nil {
 		c.Log.Warn("baseline.md: %v – retried next run", err)
 		return nil
 	}
-	sent, err := pulse.LoadSent(pulse.SentFile(dir))
+	sent, err := LoadSent(SentFile(dir))
 	if err != nil {
 		c.Log.Warn("sent.yml: %v – retried next run", err)
 		return nil
 	}
-	logs, err := pulse.LoadLogs(dir, today.AddDate(0, 0, -70), today)
+	logs, err := LoadLogs(dir, today.AddDate(0, 0, -70), today)
 	if err != nil {
 		return err
 	}
@@ -50,18 +49,18 @@ func pulseRollup(c *job.Ctx) error {
 		c.Log.Warn("%s", p)
 	}
 	final := logs.Final()
-	metrics := append(g.GoalMetrics(), pulse.Metric{Key: pulse.KeyUnlocks})
+	metrics := append(g.GoalMetrics(), Metric{Key: KeyUnlocks})
 	names := logs.AppNames()
 
 	// 1. Each newly final day, oldest first: baselines, goals, warnings, rollups.
-	var warnings []pulse.Message
+	var warnings []Message
 	rolled := 0
 	for _, d := range final {
 		if st.Rolled(d.Date) {
 			continue
 		}
 		st.Recompute(final, metrics, d.Date)
-		st.StartGoals(g, final, d.Date, pulse.ISOWeek(d.Date))
+		st.StartGoals(g, final, d.Date, ISOWeek(d.Date))
 		if st.Ready() && !d.Date.Before(today.AddDate(0, 0, -2)) { // after downtime, only recent days warn
 			warnings = append(warnings, patternWarnings(g, st, logs, d.Date, names)...)
 		}
@@ -80,7 +79,7 @@ func pulseRollup(c *job.Ctx) error {
 	}
 	if n := len(final); n > 0 { // picks up apps newly added to tracked_apps
 		st.Recompute(final, metrics, final[n-1].Date)
-		st.StartGoals(g, final, final[n-1].Date, pulse.ISOWeek(final[n-1].Date))
+		st.StartGoals(g, final, final[n-1].Date, ISOWeek(final[n-1].Date))
 	}
 	st.RolledDays = lastN(st.RolledDays, 120)
 	st.RolledWeeks, st.RolledMonths = lastN(st.RolledWeeks, 60), lastN(st.RolledMonths, 24)
@@ -91,7 +90,7 @@ func pulseRollup(c *job.Ctx) error {
 	// 2. Pattern warnings → Telegram now, or the next briefing (never dropped).
 	warnings = latestPerMetric(warnings, sent, today)
 	quiet := g.Quiet(hhmm)
-	send, deferred := pulse.Plan(warnings, sent, today, g.MaxMessages, quiet)
+	send, deferred := Plan(warnings, sent, today, g.MaxMessages, quiet)
 	nextBrief := dates.Format(today)
 	if hhmm >= c.String("briefing_at", "05:40") { // kronos.yml: jobs.pulse_rollup.options.briefing_at
 		nextBrief = dates.Format(today.AddDate(0, 0, 1))
@@ -118,14 +117,14 @@ func pulseRollup(c *job.Ctx) error {
 	if !haveY {
 		y.Date = today.AddDate(0, 0, -1)
 	}
-	brief := pulse.BuildBrief(today, y, haveY, st, g, sent.Deferred(today), names)
-	if err := pulseSave(c, pulse.BriefFile(dir), "Pulse part of today's briefing (Kronos)", brief); err != nil {
+	brief := BuildBrief(today, y, haveY, st, g, sent.Deferred(today), names)
+	if err := pulseSave(c, BriefFile(dir), "Pulse part of today's briefing (Kronos)", brief); err != nil {
 		return err
 	}
 
 	// 5. Housekeeping: 90 days of snapshots and sent log.
 	sent.Prune(today, 90)
-	if err := pulseSave(c, pulse.SentFile(dir), "Pulse sent messages (Kronos)", sent); err != nil {
+	if err := pulseSave(c, SentFile(dir), "Pulse sent messages (Kronos)", sent); err != nil {
 		return err
 	}
 	pruneSnapshots(c, dir, today.AddDate(0, 0, -90))
@@ -139,12 +138,12 @@ func pulseRollup(c *job.Ctx) error {
 }
 
 // patternWarnings: metrics over their baseline on day d that are on a strike pattern.
-func patternWarnings(g pulse.Goals, st *pulse.State, logs pulse.Logs, d time.Time, names map[string]string) []pulse.Message {
-	var out []pulse.Message
+func patternWarnings(g Goals, st *State, logs Logs, d time.Time, names map[string]string) []Message {
+	var out []Message
 	for _, m := range g.GoalMetrics() {
 		ms := st.Metrics[m.Key]
-		overs := pulse.Overs(logs.ByDate, m, ms, d)
-		if !overs[len(overs)-1] || !pulse.Pattern(overs) {
+		overs := Overs(logs.ByDate, m, ms, d)
+		if !overs[len(overs)-1] || !Pattern(overs) {
 			continue
 		}
 		base := ms.Baseline(d)
@@ -152,25 +151,25 @@ func patternWarnings(g pulse.Goals, st *pulse.State, logs pulse.Logs, d time.Tim
 		if m.Higher {
 			dir = "under"
 		}
-		label := pulse.Label(m, names)
-		out = append(out, pulse.Message{
-			ID:      "pattern-" + pulse.Slug(label) + "-" + day8(d),
-			Type:    pulse.TypePattern,
+		label := Label(m, names)
+		out = append(out, Message{
+			ID:      "pattern-" + Slug(label) + "-" + day8(d),
+			Type:    TypePattern,
 			Metric:  m.Key,
-			Channel: pulse.ChanTelegram,
+			Channel: ChanTelegram,
 			Title:   "Pulse",
 			Text: fmt.Sprintf("%s has been well %s your usual (%s %s) on %d of the last 7 days.",
-				label, dir, pulse.Num(*base), pulse.Unit(m), pulse.OverCount(overs)),
+				label, dir, Num(*base), Unit(m), OverCount(overs)),
 		})
 	}
 	return out
 }
 
 // saveState writes baseline.md only when something changed (then stamps `updated`).
-func saveState(c *job.Ctx, dir string, st *pulse.State) error {
-	path := pulse.BaselineFile(dir)
+func saveState(c *job.Ctx, dir string, st *State) error {
+	path := BaselineFile(dir)
 	header := "Pulse baselines and goals (Kronos pulse_rollup) — do not edit"
-	same, err := pulse.Encode(header, st)
+	same, err := Encode(header, st)
 	if err != nil {
 		return err
 	}
@@ -183,14 +182,14 @@ func saveState(c *job.Ctx, dir string, st *pulse.State) error {
 
 // latestPerMetric keeps one warning per metric (the newest day), and none for a metric
 // already warned about in the last 3 days.
-func latestPerMetric(ws []pulse.Message, sent *pulse.Sent, today time.Time) []pulse.Message {
+func latestPerMetric(ws []Message, sent *Sent, today time.Time) []Message {
 	last := map[string]int{}
 	for i, w := range ws {
 		last[w.Metric] = i
 	}
-	var out []pulse.Message
+	var out []Message
 	for i, w := range ws {
-		if last[w.Metric] == i && !sent.SentSince(pulse.TypePattern, w.Metric, today.AddDate(0, 0, -3)) {
+		if last[w.Metric] == i && !sent.SentSince(TypePattern, w.Metric, today.AddDate(0, 0, -3)) {
 			out = append(out, w)
 		}
 	}
@@ -198,13 +197,13 @@ func latestPerMetric(ws []pulse.Message, sent *pulse.Sent, today time.Time) []pu
 }
 
 // weeklyRollup: Sunday is final → week rollup, then weekly goal adjustment.
-func weeklyRollup(c *job.Ctx, dir string, g pulse.Goals, st *pulse.State, final []pulse.Day, sunday time.Time, names map[string]string) error {
-	week := pulse.ISOWeek(sunday)
+func weeklyRollup(c *job.Ctx, dir string, g Goals, st *State, final []Day, sunday time.Time, names map[string]string) error {
+	week := ISOWeek(sunday)
 	if containsStr(st.RolledWeeks, week) {
 		return nil
 	}
 	monday := sunday.AddDate(0, 0, -6)
-	r := pulse.BuildRollup(week, monday, sunday, final, g, st)
+	r := BuildRollup(week, monday, sunday, final, g, st)
 	for _, m := range g.GoalMetrics() {
 		mr := r.Metrics[m.Key]
 		st.Metric(m.Key).AdjustWeek(g, m, week, mr.Median) // goal met when the week's median meets it
@@ -213,44 +212,44 @@ func weeklyRollup(c *job.Ctx, dir string, g pulse.Goals, st *pulse.State, final 
 		if gl := st.Metrics[m.Key].Goal; gl != nil {
 			for _, h := range gl.History {
 				if h.Week == week && h.Change != "started" {
-					r.GoalChange = append(r.GoalChange, pulse.GoalChangeRoll{Metric: m.Key, Week: week, Change: h.Change, From: h.From, To: h.To})
+					r.GoalChange = append(r.GoalChange, GoalChangeRoll{Metric: m.Key, Week: week, Change: h.Change, From: h.From, To: h.To})
 				}
 			}
 		}
 	}
 	st.RolledWeeks = append(st.RolledWeeks, week)
-	return pulseSave(c, pulse.WeeklyFile(dir, week), "Pulse weekly rollup "+week+" (Kronos)", r)
+	return pulseSave(c, WeeklyFile(dir, week), "Pulse weekly rollup "+week+" (Kronos)", r)
 }
 
 // monthlyRollup: the month's last day is final → month rollup.
-func monthlyRollup(c *job.Ctx, dir string, g pulse.Goals, st *pulse.State, final []pulse.Day, last time.Time) error {
+func monthlyRollup(c *job.Ctx, dir string, g Goals, st *State, final []Day, last time.Time) error {
 	month := last.Format("2006-01")
 	if containsStr(st.RolledMonths, month) {
 		return nil
 	}
 	first := dates.New(last.Year(), last.Month(), 1)
-	r := pulse.BuildRollup(month, first, last, final, g, st)
+	r := BuildRollup(month, first, last, final, g, st)
 	st.RolledMonths = append(st.RolledMonths, month)
-	return pulseSave(c, pulse.MonthlyFile(dir, last), "Pulse monthly rollup "+month+" (Kronos)", r)
+	return pulseSave(c, MonthlyFile(dir, last), "Pulse monthly rollup "+month+" (Kronos)", r)
 }
 
 // sendReports sends the latest weekly/monthly rollups not yet sent: Telegram (plain numbers
 // until Omnimo writes prose) and, for weeks, a short inbox version.
-func sendReports(c *job.Ctx, dir string, g pulse.Goals, st *pulse.State, sent *pulse.Sent, names map[string]string) (int, error) {
+func sendReports(c *job.Ctx, dir string, g Goals, st *State, sent *Sent, names map[string]string) (int, error) {
 	n := 0
 	for _, week := range lastN(st.RolledWeeks, 1) { // only the latest: no backlog after a first run
 		id := "report-weekly-" + week
-		r, ok := loadRollup(pulse.WeeklyFile(dir, week))
+		r, ok := loadRollup(WeeklyFile(dir, week))
 		if !ok || sent.Has(id) {
 			continue
 		}
-		tg := pulse.Message{ID: id, Type: pulse.TypeReport, Metric: "weekly", Channel: pulse.ChanTelegram,
-			Title: "Pulse weekly " + week, Text: pulse.ReportText(r, g, names)}
+		tg := Message{ID: id, Type: TypeReport, Metric: "weekly", Channel: ChanTelegram,
+			Title: "Pulse weekly " + week, Text: ReportText(r, g, names)}
 		if err := pulseDeliver(c, dir, tg, sent, ""); err != nil {
 			return n, err
 		}
-		if short := pulse.ReportShort(r, g, names); short != "" {
-			in := pulse.Message{ID: "week-" + strings.ToLower(week), Type: pulse.TypeReport, Metric: "weekly", Channel: pulse.ChanInbox,
+		if short := ReportShort(r, g, names); short != "" {
+			in := Message{ID: "week-" + strings.ToLower(week), Type: TypeReport, Metric: "weekly", Channel: ChanInbox,
 				Title: "Your week " + week, Text: short}
 			if err := pulseDeliver(c, dir, in, sent, ""); err != nil {
 				return n, err
@@ -261,12 +260,12 @@ func sendReports(c *job.Ctx, dir string, g pulse.Goals, st *pulse.State, sent *p
 	for _, month := range lastN(st.RolledMonths, 1) {
 		id := "report-monthly-" + month
 		t, _ := dates.ParseISO(month + "-01")
-		r, ok := loadRollup(pulse.MonthlyFile(dir, t))
+		r, ok := loadRollup(MonthlyFile(dir, t))
 		if !ok || sent.Has(id) {
 			continue
 		}
-		m := pulse.Message{ID: id, Type: pulse.TypeReport, Metric: "monthly", Channel: pulse.ChanTelegram,
-			Title: "Pulse monthly " + month, Text: pulse.ReportText(r, g, names)}
+		m := Message{ID: id, Type: TypeReport, Metric: "monthly", Channel: ChanTelegram,
+			Title: "Pulse monthly " + month, Text: ReportText(r, g, names)}
 		if err := pulseDeliver(c, dir, m, sent, ""); err != nil {
 			return n, err
 		}
@@ -275,8 +274,8 @@ func sendReports(c *job.Ctx, dir string, g pulse.Goals, st *pulse.State, sent *p
 	return n, nil
 }
 
-func loadRollup(path string) (pulse.Rollup, bool) {
-	var r pulse.Rollup
+func loadRollup(path string) (Rollup, bool) {
+	var r Rollup
 	raw, err := os.ReadFile(path)
 	if err != nil || yaml.Unmarshal(raw, &r) != nil {
 		return r, false

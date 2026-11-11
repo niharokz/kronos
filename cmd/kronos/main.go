@@ -20,8 +20,9 @@ import (
 
 	"gitlab.com/niharokz/kronos/internal/config"
 	"gitlab.com/niharokz/kronos/internal/job"
-	_ "gitlab.com/niharokz/kronos/internal/jobs" // registers the built-in jobs
+	_ "gitlab.com/niharokz/kronos/internal/jobs" // registers the vault jobs
 	"gitlab.com/niharokz/kronos/internal/outbox"
+	_ "gitlab.com/niharokz/kronos/internal/pulse" // registers pulse_*
 	"gitlab.com/niharokz/kronos/internal/scheduler"
 	"gitlab.com/niharokz/kronos/internal/state"
 	_ "gitlab.com/niharokz/kronos/internal/watch" // registers the watch_* monitors

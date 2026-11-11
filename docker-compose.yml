@@ -4,8 +4,8 @@ services:
     build:
       context: .
       args:
-        VERSION: "1.1.2"
-    image: kronos:1.1.2
+        VERSION: "1.2.1"
+    image: kronos:1.2.1
     container_name: kronos
     restart: unless-stopped
     init: true                                      # proper PID 1 for script jobs (signals, zombie reaping)
@@ -16,7 +16,7 @@ services:
 
     volumes:
       - ${NOTE_PATH:?set NOTE_PATH in .env}:/data/notes   # .env NOTE_PATH → kronos.yml paths under /data/notes
-      - ${WEB_PATH:?set WEB_PATH in .env}:/docker/web     # .env WEB_PATH → kronos.yml paths.health_site
+      - ${KRONOS_HEALTH_SITE:?set KRONOS_HEALTH_SITE in .env}:/data/health-site  # .env → kronos.yml paths.health_site
       - ./kronos.yml:/app/kronos.yml:ro             # schedule + paths (copy from kronos.yml.example)
       - ./config:/app/config                        # kronos.yml paths.google_token (rewritten on refresh)
       - ./scripts:/app/scripts:ro                   # script jobs (command:) — no rebuild needed

@@ -1,4 +1,4 @@
-package jobs
+package pulse
 
 import (
 	"fmt"
@@ -9,18 +9,17 @@ import (
 
 	"gitlab.com/niharokz/kronos/internal/job"
 	"gitlab.com/niharokz/kronos/internal/outbox"
-	"gitlab.com/niharokz/kronos/internal/pulse"
 	"gitlab.com/niharokz/kronos/internal/store"
 )
 
-// Shared by pulse_watch and pulse_rollup (logic lives in internal/pulse).
+// Shared by pulse_watch and pulse_rollup.
 // Kronos never writes to <rahi>/daily/ — only goals.md (once), baseline.md,
 // state/, weekly/, monthly/ and inbox/.
 
 // pulseGoals reads goals.md, writing the commented default when it is missing.
-func pulseGoals(c *job.Ctx, dir string) (pulse.Goals, error) {
-	path := pulse.GoalsFile(dir)
-	g, exists, err := pulse.LoadGoals(path)
+func pulseGoals(c *job.Ctx, dir string) (Goals, error) {
+	path := GoalsFile(dir)
+	g, exists, err := LoadGoals(path)
 	if err != nil {
 		return g, err
 	}
@@ -28,7 +27,7 @@ func pulseGoals(c *job.Ctx, dir string) (pulse.Goals, error) {
 		if err := c.MkdirAll(dir); err != nil {
 			return g, err
 		}
-		if err := pulseWrite(c, path, []byte(pulse.DefaultGoals)); err != nil {
+		if err := pulseWrite(c, path, []byte(DefaultGoals)); err != nil {
 			return g, err
 		}
 		c.Log.Info("Created %s with defaults — add your tracked_apps", path)
@@ -38,10 +37,10 @@ func pulseGoals(c *job.Ctx, dir string) (pulse.Goals, error) {
 
 // pulseDeliver sends one message on its channel and records it in sent.
 // In a dry run it prints the message (priority, channel, id) instead.
-func pulseDeliver(c *job.Ctx, dir string, m pulse.Message, sent *pulse.Sent, forDay string) error {
+func pulseDeliver(c *job.Ctx, dir string, m Message, sent *Sent, forDay string) error {
 	if c.DryRun {
-		prio := fmt.Sprintf("p%d", pulse.Priority(m.Type))
-		if m.Type == pulse.TypeReport {
+		prio := fmt.Sprintf("p%d", Priority(m.Type))
+		if m.Type == TypeReport {
 			prio = "report" // outside the daily cap
 		}
 		fmt.Fprintf(c.Out, "~ would send [%s] %-8s %s — %s\n    %s\n", prio, m.Channel, m.ID, m.Title,
@@ -50,19 +49,19 @@ func pulseDeliver(c *job.Ctx, dir string, m pulse.Message, sent *pulse.Sent, for
 		return nil
 	}
 	switch m.Channel {
-	case pulse.ChanInbox:
-		data, err := pulse.InboxMarkdown(m, c.Today)
+	case ChanInbox:
+		data, err := InboxMarkdown(m, c.Today)
 		if err != nil {
 			return err
 		}
-		path := pulse.InboxFile(dir, m.ID)
+		path := InboxFile(dir, m.ID)
 		if err := c.MkdirAll(filepath.Dir(path)); err != nil {
 			return err
 		}
 		if err := c.WriteFile(path, data); err != nil {
 			return err
 		}
-	case pulse.ChanTelegram:
+	case ChanTelegram:
 		if err := c.Notify(outbox.Notice, m.Title, m.Text); err != nil {
 			return err
 		}
@@ -74,7 +73,7 @@ func pulseDeliver(c *job.Ctx, dir string, m pulse.Message, sent *pulse.Sent, for
 
 // pulseSave writes a state file (YAML with a header line).
 func pulseSave(c *job.Ctx, path, header string, v any) error {
-	data, err := pulse.Encode(header, v)
+	data, err := Encode(header, v)
 	if err != nil {
 		return err
 	}

@@ -69,7 +69,7 @@ var defaultPaths = map[string]string{
 	"finance_inbox": "/data/notes/data/finance/inbox",
 	"rahi":          "/data/notes/logs/rahi",
 	"watch":         "/data/notes/logs/watch",
-	"health_site":   "/docker/web/health",
+	"health_site":   "/data/health-site",
 	"google_token":  "/app/config/token.json",
 }
 

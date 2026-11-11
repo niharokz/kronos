@@ -1,4 +1,4 @@
-// Package jobs holds Kronos's built-in jobs. Each job is self-contained:
+// Package jobs holds Kronos's vault jobs (module "jobs"). Each job is self-contained:
 //
 //	<name>.go       the job; registers itself: func init() { job.Register("<name>", fn) }
 //	<name>_test.go  its tests (shared test helpers are in jobs_test.go)
@@ -16,5 +16,5 @@
 // disagree, so a half-removed job is caught by `go test`.
 //
 // Code shared by several jobs lives in helpers.go; nothing job-specific goes there.
-// Pulse's two jobs share pulse.go, and their rules live in internal/pulse.
+// Other modules register their own jobs: internal/pulse (pulse_*) and internal/watch (watch_*).
 package jobs

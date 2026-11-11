@@ -1,8 +1,11 @@
 # ── Secrets and personal config (never committed) ───────────────────────
+# .env may be a symlink to a shared homelab .env — ignored either way.
 .env
 .env.*
 !.env.example
 kronos.yml
+kronos.yml.*
+!kronos.yml.example
 config/*
 !config/.gitkeep
 scripts/*
@@ -12,16 +15,23 @@ scripts/*
 **/credentials.json
 **/client_secret*.json
 
-# Patch zips kept locally (applied on the server, never committed)
+# Patch zips and config backups kept locally (applied on the server, never committed)
 /patch/
 /patches/
+*.bak
+*.zip
 
 # ── Build and test output ───────────────────────────────────────────────
 /kronos
+/bin/
+/dist/
 *.exe
 *.test
 *.out
+*.log
 coverage.*
+go.work
+go.work.sum
 
 # ── Editor and OS clutter ───────────────────────────────────────────────
 .idea/
@@ -30,6 +40,4 @@ coverage.*
 *~
 .DS_Store
 Thumbs.db
-
-# Local backups
-*.bak
+desktop.ini

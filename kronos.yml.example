@@ -34,7 +34,7 @@ paths:
   finance_inbox: /data/notes/data/finance/inbox  # Arthik's inbox: Kronos writes kronos.md there
   rahi: /data/notes/logs/rahi                    # Rahi folder: Pulse reads daily/, writes baseline/state/weekly/monthly/inbox
   watch: /data/notes/logs/watch                  # monitors (watch_*): last values, failure counts
-  health_site: /docker/web/health
+  health_site: /data/health-site                # .env KRONOS_HEALTH_SITE is mounted here (health_website)
   google_token: /app/config/token.json
   # Every path is also given to command jobs as KRONOS_<NAME> (e.g. KRONOS_EVENTS).
 
@@ -45,6 +45,17 @@ settings:
   alerts: true                # failures → Telegram via Omnimo
 
 jobs:
+# ── Schedule plan (container time, TZ) ─────────────────────────────────
+# Kronos runs one job at a time, so jobs never overlap; slots are spread so
+# that nothing waits. Hourly lanes: :00/:30 pulse_watch (08–22), :10 pulse_rollup,
+# :50 watch_rewards. Nightly chain, 10 min apart, in dependency order:
+#   02:05 untitled_import   02:15 inbox_archive     02:25 event_archive
+#   02:35 subscription_update → 02:45 arthik_subscriptions → 02:55 event_update
+#   03:15 calendar_sync     03:25 health_website    03:35 daily_update
+#   03:45 archive_rollover (1 Jan)   05:40 nimo_briefing (after pulse_rollup 05:10)
+#   11:15 watch_gold        11:35 watch_domains
+
+  # ── Vault jobs (internal/jobs) ──
 
   # Telegram notice with host uptime + RAM when Kronos starts
   restarted:
@@ -53,78 +64,79 @@ jobs:
 
   # Merge untitled inbox files into note.md
   untitled_import:
-    schedule: "0 2 * * *"
+    schedule: "5 2 * * *"
     description: "Merge untitled inbox notes into note.md."
     # options: { note_file: note.md }
 
   # Archive inbox files older than 30 days
   inbox_archive:
-    schedule: "5 2 * * *"
+    schedule: "15 2 * * *"
     description: "Move inbox files older than 30 days to archive."
     # options: { archive_after_days: 30, exclude: [note.md, guide.md] }
 
-  # Advance overdue subscription due dates, create due-today events, sort
-  subscription_update:
-    schedule: "10 2 * * *"
-    description: "Update subscription due dates and sort subscriptions."
-
-  # Subscriptions that fell due → drafts in Arthik's inbox (runs after subscription_update)
-  arthik_subscriptions:
-    schedule: "12 2 * * *"
-    description: "Hand due subscriptions to Arthik as drafts."
-    # options: { max_catch_up_days: 3, keep_days: 60 }
-
   # Move closed one-time events older than 30 days to backup
   event_archive:
-    schedule: "15 2 * * *"
+    schedule: "25 2 * * *"
     description: "Move closed one-time events older than 30 days to event.md.bck."
     # options: { archive_after_days: 30 }
 
-  # Copy all Google Calendar events (birthdays, holidays, your events) to calendar.md
-  calendar_sync:
-    schedule: "20 2 * * *"
-    description: "Sync Google Calendar events to calendar.md."
-    # options: { past_days: 7, ahead_days: 365, exclude: [], categories: { Family: family } }
+  # Advance overdue subscription due dates, create due-today events, sort
+  subscription_update:
+    schedule: "35 2 * * *"
+    description: "Update subscription due dates and sort subscriptions."
+
+  # Subscriptions that fell due → drafts in Arthik's inbox (after subscription_update)
+  arthik_subscriptions:
+    schedule: "45 2 * * *"
+    description: "Hand due subscriptions to Arthik as drafts."
+    # options: { max_catch_up_days: 3, keep_days: 60 }
 
   # Advance overdue events, reopen recurring, purge old closed, sort
   event_update:
-    schedule: "30 2 * * *"
+    schedule: "55 2 * * *"
     description: "Update recurring events, overdue events, sorting and closed items."
     # options: { purge_after_days: 365 }
 
+  # Copy all Google Calendar events (birthdays, holidays, your events) to calendar.md
+  calendar_sync:
+    schedule: "15 3 * * *"
+    description: "Sync Google Calendar events to calendar.md."
+    # options: { past_days: 7, ahead_days: 365, exclude: [], categories: { Family: family } }
+
   # Regenerate the health site — nightly, and within seconds of a health.md edit
   health_website:
-    schedule: "45 2 * * *"
+    schedule: "25 3 * * *"
     description: "Create Health Website."
     watch: [/data/notes/data/health.md]
 
-  # Generate daily agenda
+  # Generate the daily agenda (events, subscriptions, calendar)
   daily_update:
-    schedule: "0 3 * * *"
+    schedule: "35 3 * * *"
     description: "Generate daily agenda."
     # options: { upcoming_days: 7 }
 
   # Roll archive files into previous year's folder (1 January)
   archive_rollover:
-    schedule: "30 3 1 1 *"
+    schedule: "45 3 1 1 *"
     description: "Move archive files into previous year's folder."
 
-  # Pulse: snapshot today's Rahi log, nudge apps over their usual and steps unlikely to finish
-  pulse_watch:
-    schedule: "*/30 8-22 * * *"
-    description: "Pulse: intraday snapshot and nudges."
-
-  # Pulse: process final days — baselines, goals, warnings, weekly/monthly rollups, briefing part
-  pulse_rollup:
-    schedule: "5 * * * *"
-    description: "Pulse: baselines, goals and rollups from final Rahi days."
-    # options: { briefing_at: '05:40' }
-
-  # Morning briefing: agenda goes to Omnimo, which adds Nimo's commentary
+  # Morning briefing: agenda (+ Pulse brief) goes to Omnimo, which adds Nimo's commentary
   nimo_briefing:
     schedule: "40 5 * * *"
     description: "Queue daily agenda as an Omnimo briefing."
 
+  # ── Pulse (internal/pulse): digital + health coach over Rahi's daily logs ──
+
+  # Snapshot today's Rahi log; nudge apps over their usual and steps unlikely to finish
+  pulse_watch:
+    schedule: "*/30 8-22 * * *"
+    description: "Pulse: intraday snapshot and nudges."
+
+  # Final days → baselines, goals, warnings, weekly/monthly rollups, briefing part
+  pulse_rollup:
+    schedule: "10 * * * *"
+    description: "Pulse: baselines, goals and rollups from final Rahi days."
+    # options: { briefing_at: '05:40' }   # keep equal to nimo_briefing's time
 
   # ── Monitors (internal/watch): external sites, told only when something changes ──
   # State: paths.watch/<name>.yml (rewritten only on change). Common options:
@@ -135,21 +147,12 @@ jobs:
 
   # New items / points changes in the public Microsoft Rewards (India) catalog
   watch_rewards:
-    schedule: "17 * * * *"          # :17 — clear of pulse_watch (:00/:30) and pulse_rollup (:05)
+    schedule: "50 * * * *"
     skip_if_busy: true
     catch_up: false
     timeout: 300
     description: "Watch: Microsoft Rewards catalog."
     # options: { market: in, pages: [featured, giftcards, donate, sweepstakes], notify_price: true, notify_removed: false, notify: [telegram] }
-
-  # Cheapest registrar per TLD (transfer + 1st renewal)
-  watch_domains:
-    schedule: "20 11 * * *"
-    catch_up: false
-    timeout: 300
-    description: "Watch: domain prices."
-    options: { tlds: [ar], rank_by: total, top: 1 }
-    # more options: { sources: [domainoffer, tld-list], max_pages: 5, notify: [telegram, rahi] }
 
   # Gold rate per gram (any city / purity; another site via url + pattern)
   watch_gold:
@@ -160,8 +163,17 @@ jobs:
     options: { city: bangalore, karat: 22 }
     # more options: { url: 'https://cleartax.in/gold-rate-{city}', pattern: '₹\s*([\d,]+(?:\.\d+)?)\s*per gram for {karat}\s*K gold', notify: [telegram, rahi] }
 
-  # ── Example script job (no rebuild needed) ──
+  # Cheapest registrar per TLD (transfer + 1st renewal)
+  watch_domains:
+    schedule: "35 11 * * *"
+    catch_up: false
+    timeout: 300
+    description: "Watch: domain prices."
+    options: { tlds: [ar], rank_by: total, top: 1 }
+    # more options: { sources: [domainoffer, tld-list], max_pages: 5, notify: [telegram, rahi] }
+
+  # ── Example script job (no rebuild needed; see scripts/disk_check.sh.example) ──
   # disk_check:
-  #   schedule: "0 4 * * *"
+  #   schedule: "5 4 * * *"
   #   description: "Warn when the disk is over 90% full."
   #   command: ["sh", "/app/scripts/disk_check.sh"]

@@ -58,24 +58,26 @@ Any job can also have `watch: [files]`: it then runs again ~10–20 s after one 
 | Job | Default schedule | What it does |
 |---|---|---|
 | `restarted` | `@startup` | Telegram notice with time, host uptime (tells a host reboot from a container restart) and RAM. |
-| `untitled_import` | daily 02:00 | Appends every `*untitled*` inbox file to `note.md` under a dated heading, then deletes the original. |
-| `inbox_archive` | daily 02:05 | Moves inbox files not modified for 30 days to the archive, never overwriting (`todo.md` → `todo_1.md`). |
-| `subscription_update` | daily 02:10 | Rolls overdue due dates forward by their cycle; a subscription due **today** gets a one-time `pending` event. |
-| `arthik_subscriptions` | daily 02:12 | Subscriptions that fall due (since its last run, so never old ones) become drafts in Arthik's inbox (`data/finance/inbox/kronos.md`), to accept or reject in Arthik. |
-| `event_archive` | daily 02:15 | Moves closed one-time events older than 30 days into a backup file. |
-| `calendar_sync` | daily 02:20 | Copies every visible Google Calendar (your events, contact birthdays, holidays, shared calendars) into `calendar.md` — Calendar API, read-only, 7 days back to 365 ahead. |
-| `event_update` | daily 02:30 | Overdue one-time events → today as `pending`; overdue recurring → next date; closed recurring → reopened at next date; sorts. |
-| `health_website` | daily 02:45 + on edit | Renders `health.md` into one static page in the nss look: classless, no JavaScript, dark/light by system. Adds a stats strip, pace per run, countdowns and a Daily activity section (steps, sleep, heart rate, calories charts) from `daily:` entries. |
-| `daily_update` | daily 03:00 | Writes the agenda: **Overdue**, **Due Today**, **Upcoming (7 days)** — events, subscriptions and `calendar.md` (lines start with the category, e.g. `BIRTHDAY- Asha`, `FESTIVAL- Karva Chauth`). |
-| `archive_rollover` | 1 Jan 03:30 | Moves loose archive files into a folder named after the previous year. |
+| `untitled_import` | daily 02:05 | Appends every `*untitled*` inbox file to `note.md` under a dated heading, then deletes the original. |
+| `inbox_archive` | daily 02:15 | Moves inbox files not modified for 30 days to the archive, never overwriting (`todo.md` → `todo_1.md`). |
+| `event_archive` | daily 02:25 | Moves closed one-time events older than 30 days into a backup file. |
+| `subscription_update` | daily 02:35 | Rolls overdue due dates forward by their cycle; a subscription due **today** gets a one-time `pending` event. |
+| `arthik_subscriptions` | daily 02:45 | Subscriptions that fall due (since its last run, so never old ones) become drafts in Arthik's inbox (`data/finance/inbox/kronos.md`), to accept or reject in Arthik. |
+| `event_update` | daily 02:55 | Overdue one-time events → today as `pending`; overdue recurring → next date; closed recurring → reopened at next date; sorts. |
+| `calendar_sync` | daily 03:15 | Copies every visible Google Calendar (your events, contact birthdays, holidays, shared calendars) into `calendar.md` — Calendar API, read-only, 7 days back to 365 ahead. |
+| `health_website` | daily 03:25 + on edit | Renders `health.md` into one static page in the nss look: classless, no JavaScript, dark/light by system. Adds a stats strip, pace per run, countdowns and a Daily activity section (steps, sleep, heart rate, calories charts) from `daily:` entries. |
+| `daily_update` | daily 03:35 | Writes the agenda: **Overdue**, **Due Today**, **Upcoming (7 days)** — events, subscriptions and `calendar.md` (lines start with the category, e.g. `BIRTHDAY- Asha`, `FESTIVAL- Karva Chauth`). |
+| `archive_rollover` | 1 Jan 03:45 | Moves loose archive files into a folder named after the previous year. |
 | `nimo_briefing` | daily 05:40 | Sends the agenda as a *briefing* — the bot posts it and adds an AI commentary. With Pulse set up, its brief (yesterday's verdict, today's targets) is appended. |
 | `pulse_watch` | every 30 min, 08:00–22:30 | Pulse: snapshots today's Rahi log; nudges an app past its usual while on a strike pattern, and steps when you're unlikely to finish. |
-| `pulse_rollup` | hourly at :05 | Pulse: for each Rahi day that turned final — baselines, self-tightening goals, pattern warnings, weekly/monthly rollups and reports; refreshes the briefing part. |
-| `watch_rewards` | hourly at :17, skipped when busy | Monitor: new items and points changes in the public Microsoft Rewards (India) catalog. |
-| `watch_domains` | daily 11:20 | Monitor: cheapest registrar per TLD (default `.ar`, transfer + 1st renewal). |
+| `pulse_rollup` | hourly at :10 | Pulse: for each Rahi day that turned final — baselines, self-tightening goals, pattern warnings, weekly/monthly rollups and reports; refreshes the briefing part. |
+| `watch_rewards` | hourly at :50, skipped when busy | Monitor: new items and points changes in the public Microsoft Rewards (India) catalog. |
 | `watch_gold` | daily 11:15 | Monitor: gold rate per gram (default 22K, Bangalore). |
+| `watch_domains` | daily 11:35 | Monitor: cheapest registrar per TLD (default `.ar`, transfer + 1st renewal). |
 
-`kronos jobs` lists the built-in jobs; options per job are documented at the top of its file in `internal/jobs/`.
+The defaults are spread so that nothing waits: hourly lanes at :00/:30 (`pulse_watch`), :10 (`pulse_rollup`) and :50 (`watch_rewards`), and the nightly jobs 10 minutes apart in dependency order (subscriptions before Arthik drafts and events, everything before the agenda, the agenda and Pulse before the briefing).
+
+`kronos jobs` lists the built-in jobs; options per job are documented at the top of its file (`internal/jobs/`, `internal/pulse/job_*.go`, `internal/watch/`).
 
 ---
 
@@ -221,7 +223,7 @@ Pulse reads the daily logs written by the **Rahi** launcher (`<rahi>/daily/YYYYM
   - steps when you're unlikely to finish — at most a soft and a final nudge, silent once reached. The forecast spreads your usual total over waking hours until 14 goal days of snapshots exist, then uses what you typically walk after that time of day.
 - **Budget:** `max_messages_per_day` (reports excluded) and no messages in quiet hours. A pattern warning is never dropped; it moves to the next briefing.
 - **Feedback:** if the last 3 nudges of a kind were dismissed (✓ without opening) or the day still ended off target, that kind backs off to every other day for a week. A mindful turn-back counts as improvement.
-- **Reports:** weekly (when Sunday is final) to Telegram plus a short version in the inbox; monthly to Telegram. They are plain numbers until Omnimo can write prose from the rollup (see `docs/omnimo-report-kind.md`).
+- **Reports:** weekly (when Sunday is final) to Telegram plus a short version in the inbox; monthly to Telegram. They are plain numbers until Omnimo can write prose from the rollup (planned Omnimo `report` kind: see ARCHITECTURE.md §6.8).
 
 Message ids are deterministic (`nudge-instagram-20261024`, `steps-final-20261024`, `pattern-screen-time-20261023`, `report-weekly-2026-W43`), so reruns never duplicate. A log Rahi is still writing is skipped with a warning and read again on the next run.
 
@@ -343,13 +345,13 @@ docker exec kronos kronos run watch_rewards --dry-run
 
    | Variable | Meaning |
    |---|---|
-   | `DATA_PATH` | Base data folder on the host (only used to build the paths below) |
+   | `DATA_PATH` | Base data folder on the host (optional; only used to build the paths below) |
    | `NOTE_PATH` | Host folder of the notes vault, e.g. `${DATA_PATH}/notes` → mounted at `/data/notes` |
-   | `WEB_PATH` | Host folder the health site is published under → mounted at `/docker/web` |
+   | `KRONOS_HEALTH_SITE` | Host folder the health site's `index.html` is written to → mounted at `/data/health-site` |
    | `PUID`, `PGID` | Owner of the files Kronos writes (`id -u`, `id -g`) |
    | `TZ` | Time zone for the cron schedules |
 
-   Nothing host-specific lives in the repo: `docker-compose.yml` only references these variables, and `kronos.yml` uses container paths. Compose refuses to start if `NOTE_PATH` or `WEB_PATH` is unset. The host folders must be writable by `PUID:PGID`.
+   Nothing host-specific lives in the repo: `docker-compose.yml` only references these variables, and `kronos.yml` uses container paths only. Compose refuses to start if `NOTE_PATH` or `KRONOS_HEALTH_SITE` is unset. The host folders must be writable by `PUID:PGID`. `.env` can also be a symlink to a shared homelab `.env` that defines these names. No secrets go in `.env`; the only secret, the Google token, lives in `./config/` (gitignored).
 
 3. **Telegram (optional).** Kronos writes messages into `paths.outbox`; a bot that reads that folder sends them. With Omnimo, set its `outbox.dir` to the same folder. Without a bot, messages simply stay in the folder.
 
@@ -525,10 +527,10 @@ kronos/
 │   ├── config/                 kronos.yml
 │   ├── scheduler/              cron, startup, daemons, watches, catch-up, timeouts, alerts
 │   ├── job/                    Register(), Ctx, logger, dry-run diff  ← the plug-in API
-│   ├── jobs/                   built-in jobs: <name>.go + <name>_test.go each (+ assets/health.css)
-│   ├── pulse/                  Pulse rules (baselines, goals, strikes, forecast, messages, rollups)
-│   ├── watch/                  monitors: engine (watch.go, client.go) + one file per watch_<name>
+│   ├── jobs/                   module "vault jobs": <name>.go + <name>_test.go each (+ assets/health.css)
+│   ├── pulse/                  module "Pulse": rules + pulse_watch / pulse_rollup (job_*.go)
 │   │   └── fixture/            fake Rahi logs for testing (kronos pulse-fixture)
+│   ├── watch/                  module "monitors": engine (watch.go, client.go) + one file per watch_<name>
 │   ├── store/                  YAML records, atomic writes, Python-compatible formatting
 │   ├── dates/                  date parsing and repeat rules
 │   ├── outbox/                 Telegram hand-off (outbox folder)

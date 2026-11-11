@@ -1,4 +1,4 @@
-package jobs
+package pulse
 
 import (
 	"crypto/sha256"
@@ -11,7 +11,6 @@ import (
 
 	"gitlab.com/niharokz/kronos/internal/dates"
 	"gitlab.com/niharokz/kronos/internal/job"
-	"gitlab.com/niharokz/kronos/internal/pulse"
 )
 
 // pulseFixture writes `n` final Rahi days ending yesterday and returns the rahi dir.
@@ -37,7 +36,7 @@ func pulseFixture(t *testing.T, c *job.Ctx, root string, n, bad int) string {
 
 func writeRahiDay(t *testing.T, dir string, d time.Time, final bool, screen, insta, steps int) {
 	t.Helper()
-	put(t, pulse.DayFile(dir, d), fmt.Sprintf(`# Rahi daily log
+	put(t, DayFile(dir, d), fmt.Sprintf(`# Rahi daily log
 date: '%s'
 final: %v
 health: { steps: %d, sleep: { start: '23:30', end: '06:30', min: 420 } }
@@ -69,7 +68,7 @@ func TestPulseRollup(t *testing.T) {
 	if err := pulseRollup(c); err != nil {
 		t.Fatal(err)
 	}
-	st, err := pulse.LoadState(pulse.BaselineFile(dir))
+	st, err := LoadState(BaselineFile(dir))
 	if err != nil || !st.Ready() || st.Metrics["screen"].Goal == nil || len(st.RolledDays) != 14 {
 		t.Fatalf("state %+v err %v", st, err)
 	}
@@ -85,7 +84,7 @@ func TestPulseRollup(t *testing.T) {
 	if !warned {
 		t.Errorf("no pattern warning in outbox (%d files)", len(outbox))
 	}
-	b, ok := pulse.LoadBrief(pulse.BriefFile(dir), c.Today)
+	b, ok := LoadBrief(BriefFile(dir), c.Today)
 	if !ok || !strings.Contains(b.Text(), "Yesterday: Screen time 320 ✗") || !strings.Contains(b.Text(), "Today: Screen time ≤ 288 min") {
 		t.Errorf("brief:\n%s", b.Text())
 	}
@@ -113,7 +112,7 @@ func TestPulseRollupDefersInQuietHours(t *testing.T) {
 	if out, _ := filepath.Glob(filepath.Join(root, "outbox", "*.json")); len(out) != 0 {
 		t.Fatalf("sent during quiet hours: %v", out)
 	}
-	sent, _ := pulse.LoadSent(pulse.SentFile(dir))
+	sent, _ := LoadSent(SentFile(dir))
 	if d := sent.Deferred(c.Today.AddDate(0, 0, 1)); len(d) == 0 {
 		t.Fatal("warning not deferred to tomorrow's briefing")
 	}
@@ -121,7 +120,7 @@ func TestPulseRollupDefersInQuietHours(t *testing.T) {
 	if err := pulseRollup(c); err != nil {
 		t.Fatal(err)
 	}
-	if b, ok := pulse.LoadBrief(pulse.BriefFile(dir), c.Today); !ok || !strings.Contains(b.Text(), "⚠ Screen time has been well over") {
+	if b, ok := LoadBrief(BriefFile(dir), c.Today); !ok || !strings.Contains(b.Text(), "⚠ Screen time has been well over") {
 		t.Errorf("deferred warning missing from brief:\n%s", b.Text())
 	}
 }
@@ -134,14 +133,14 @@ func TestPulseWeeklyRollup(t *testing.T) {
 	if err := pulseRollup(c); err != nil {
 		t.Fatal(err)
 	}
-	r, ok := loadRollup(pulse.WeeklyFile(dir, "2026-W43"))
+	r, ok := loadRollup(WeeklyFile(dir, "2026-W43"))
 	if !ok || r.DaysLogged != 7 || *r.Metrics["screen"].Median != 200 {
 		t.Fatalf("weekly rollup %+v", r)
 	}
-	if _, err := os.Stat(pulse.InboxFile(dir, "week-2026-w43")); err != nil {
+	if _, err := os.Stat(InboxFile(dir, "week-2026-w43")); err != nil {
 		t.Error("short weekly report not in the inbox")
 	}
-	sent, _ := pulse.LoadSent(pulse.SentFile(dir))
+	sent, _ := LoadSent(SentFile(dir))
 	if !sent.Has("report-weekly-2026-W43") {
 		t.Error("weekly report not sent")
 	}
@@ -155,11 +154,11 @@ func TestPulseObserveOnly(t *testing.T) {
 	if err := pulseRollup(c); err != nil {
 		t.Fatal(err)
 	}
-	st, _ := pulse.LoadState(pulse.BaselineFile(dir))
+	st, _ := LoadState(BaselineFile(dir))
 	if st.Ready() || st.Metrics["screen"].Goal != nil {
 		t.Error("goals before 7 days")
 	}
-	if b, _ := pulse.LoadBrief(pulse.BriefFile(dir), c.Today); !strings.Contains(b.Text(), "learning: 4 of 7") {
+	if b, _ := LoadBrief(BriefFile(dir), c.Today); !strings.Contains(b.Text(), "learning: 4 of 7") {
 		t.Errorf("brief: %s", b.Text())
 	}
 }

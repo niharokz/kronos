@@ -1,4 +1,4 @@
-package jobs
+package pulse
 
 import (
 	"os"
@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"gitlab.com/niharokz/kronos/internal/pulse"
 )
 
 // An app over its 7-day median while on a strike pattern → one inbox nudge per day; a snapshot each run.
@@ -23,7 +21,7 @@ func TestPulseWatchAppNudge(t *testing.T) {
 	if err := pulseWatch(c); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(pulse.InboxFile(dir, "nudge-instagram-20261021"))
+	raw, err := os.ReadFile(InboxFile(dir, "nudge-instagram-20261021"))
 	if err != nil {
 		t.Fatal("no app nudge in the inbox\n" + out.String())
 	}
@@ -31,16 +29,16 @@ func TestPulseWatchAppNudge(t *testing.T) {
 		!strings.Contains(s, "over on 3 of the last 7 days") {
 		t.Errorf("nudge:\n%s", s)
 	}
-	in, _ := pulse.LoadIntraday(pulse.IntradayFile(dir, c.Today))
+	in, _ := LoadIntraday(IntradayFile(dir, c.Today))
 	if len(in.Snapshots) != 1 || *in.Snapshots[0].Steps != 9000 || in.Snapshots[0].Apps["com.instagram.android"] != 95 {
 		t.Errorf("snapshot %+v", in)
 	}
-	_ = os.Remove(pulse.InboxFile(dir, "nudge-instagram-20261021")) // Rahi moved it to read/
+	_ = os.Remove(InboxFile(dir, "nudge-instagram-20261021")) // Rahi moved it to read/
 	c.Now = c.Now.Add(30 * time.Minute)
 	if err := pulseWatch(c); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(pulse.InboxFile(dir, "nudge-instagram-20261021")); err == nil {
+	if _, err := os.Stat(InboxFile(dir, "nudge-instagram-20261021")); err == nil {
 		t.Error("same app nudged twice in a day")
 	}
 }
@@ -58,7 +56,7 @@ func TestPulseWatchStepNudge(t *testing.T) {
 	if err := pulseWatch(c); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(pulse.InboxFile(dir, "steps-final-20261021"))
+	raw, err := os.ReadFile(InboxFile(dir, "steps-final-20261021"))
 	if err != nil || !strings.Contains(string(raw), "Last call: 6,000 steps to go") {
 		t.Fatalf("final step nudge: %s %v", raw, err)
 	}
@@ -89,7 +87,7 @@ func TestPulseWatchObserveOnly(t *testing.T) {
 	if files, _ := filepath.Glob(filepath.Join(dir, "inbox", "*.md")); len(files) != 0 {
 		t.Errorf("nudged while observing: %v", files)
 	}
-	if _, err := os.Stat(pulse.IntradayFile(dir, c.Today)); err != nil {
+	if _, err := os.Stat(IntradayFile(dir, c.Today)); err != nil {
 		t.Error("no snapshot while observing")
 	}
 }
@@ -99,7 +97,7 @@ func TestPulseWatchToleratesBadLog(t *testing.T) {
 	c, root, _ := testCtx(t, "2026-10-21", false)
 	c.Now = c.Today.Add(9 * time.Hour)
 	dir := pulseFixture(t, c, root, 8, 0)
-	put(t, pulse.DayFile(dir, c.Today), "date: '2026-10-21'\nscreen: { total_min: [unclosed\n")
+	put(t, DayFile(dir, c.Today), "date: '2026-10-21'\nscreen: { total_min: [unclosed\n")
 	if err := pulseWatch(c); err != nil {
 		t.Fatalf("should warn, not fail: %v", err)
 	}
@@ -133,7 +131,7 @@ func TestPulseDryRun(t *testing.T) {
 	if files, _ := filepath.Glob(filepath.Join(c.Cfg.Paths["outbox"], "*")); len(files) != 0 {
 		t.Errorf("outbox written in a dry run: %v", files)
 	}
-	for _, p := range []string{pulse.BaselineFile(dir), pulse.SentFile(dir), pulse.IntradayFile(dir, c.Today), pulse.BriefFile(dir)} {
+	for _, p := range []string{BaselineFile(dir), SentFile(dir), IntradayFile(dir, c.Today), BriefFile(dir)} {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("sandbox file not written: %v", err)
 		}
@@ -143,7 +141,7 @@ func TestPulseDryRun(t *testing.T) {
 	c2.Now = c2.Today.Add(9 * time.Hour)
 	dir2 := pulseFixture(t, c2, root2, 14, 3)
 	_ = pulseRollup(c2)
-	if _, err := os.Stat(pulse.BaselineFile(dir2)); err == nil {
+	if _, err := os.Stat(BaselineFile(dir2)); err == nil {
 		t.Error("dry run on real data wrote baseline.md")
 	}
 }
