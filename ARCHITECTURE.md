@@ -14,7 +14,7 @@ Kronos is the time-driven half of the Nimory homelab: nightly maintenance of the
 | **Omnimo** (Go) | Telegram bot + AI (Nimo) — the only Telegram sender | `event.md`, the **outbox** folder |
 | **Natlas** (Go) | Web UI for the data files | `event.md`, `subscription.md`, `health.md` |
 | **Arthik** | Finance app | `data/finance/inbox/kronos.md` (Kronos writes, Arthik reads) |
-| **Kshan** (Android) | Widget app (replaced RahiOS) — writes daily logs and event drafts, shows the inbox and weather | `logs/kshan/` (Kshan writes `daily/`, `events.md`, `config.md`; Kronos writes `weather.md`, `inbox/`) |
+| **Kshan** (Android) | Widget app (replaced RahiOS) — writes daily logs and event drafts, shows the inbox and weather | `logs/kshan/` (Kshan writes `daily/`, `events.md`, `config.md`, `weather/location.md`; Kronos writes `weather/weather.md`, `inbox/`) |
 | **Kronos** (Go) | Scheduler | — |
 
 Kronos never talks to Telegram or any AI. It writes outbox files; Omnimo sends them.
@@ -31,7 +31,7 @@ Kronos is a small core plus four job modules. A module is one Go package that re
 |---|---|---|---|---|
 | **Vault jobs** | `internal/jobs` | `restarted`, `untitled_import`, `inbox_archive`, `event_archive`, `subscription_update`, `arthik_subscriptions`, `event_update`, `calendar_sync`, `health_website`, `daily_update`, `archive_rollover`, `nimo_briefing` | `/data/notes/data`, `inbox`, `archive`, health site | Google Calendar API only |
 | **Pulse** | `internal/pulse` | `pulse_watch`, `pulse_rollup` | `logs/pulse` (own), reads `logs/kshan/daily` (+ `logs/rahi/daily`), writes `logs/kshan/inbox` | none |
-| **Kshan** | `internal/kshan` | `kshan_weather`, `kshan_events` | `logs/kshan/weather.md`, reads `logs/kshan/events.md` (+ `logs/rahi/events.md`) → `data/event.md` | api.open-meteo.com |
+| **Kshan** | `internal/kshan` | `kshan_weather`, `kshan_events` | `logs/kshan/weather/weather.md` (reads `weather/location.md`), reads `logs/kshan/events.md` (+ `logs/rahi/events.md`) → `data/event.md` | api.open-meteo.com |
 | **Monitors** | `internal/watch` | `watch_rewards`, `watch_gold`, `watch_domains` | `/data/notes/logs/watch` | the watched sites |
 
 Core (shared by all modules): `config`, `scheduler`, `job`, `store`, `dates`, `outbox`, `state`.
@@ -139,10 +139,10 @@ internal/pulse/              module "pulse" (§6.8)
 
 internal/kshan/              module "kshan" (§6.10)
   doc.go                     file roles
-  weather.go                 kshan_weather: open-meteo → weather.md; failure mark kshan_weather.fail.yml next to state.json
+  weather.go                 kshan_weather: location.md → open-meteo → weather.md, skip rule, run reason; failure mark next to state.json
   events.go                  kshan_events: drafts (Kshan + RahiOS fallback) → event.md
   when.go                    ParseWhen: title, date and time from a draft's text
-  *_test.go                  golden weather.md (testdata/forecast.json → testdata/weather.golden), failures, dry run,
+  *_test.go                  golden weather.md (testdata/forecast.json → testdata/weather.golden), location.md parsing, skip rule, failures, dry run,
                              WMO words, draft import/idempotency/errors/fallback, date phrases
 
 internal/watch/              module "monitors" (§6.9)
@@ -192,7 +192,7 @@ CI (`.gitlab-ci.yml`): `gofmt -l` empty, `go mod verify`, `go vet`, `go test`, b
 | `health_site` | `/data/health-site` | health_website (`.env KRONOS_HEALTH_SITE`) |
 | `inbox`, `archive`, `daily` | `/data/notes/inbox`, `/data/notes/archive`, `/data/notes/inbox/daily.md` | inbox jobs, agenda, briefing |
 | `finance_inbox` | `/data/notes/data/finance/inbox` | arthik_subscriptions |
-| `vault` | `/data/notes` | relative file options (`kshan_weather.file`) |
+| `vault` | `/data/notes` | relative file options (`kshan_weather.location_file`/`weather_file`) |
 | `pulse` | `/data/notes/logs/pulse` | Pulse's own files; nimo_briefing (brief) |
 | `daily_logs`, `daily_logs_old` | `/data/notes/logs/kshan/daily`, `…/logs/rahi/daily` | Pulse (old = read-only fallback per day; `""` = off) |
 | `phone_inbox`, `phone_inbox_old` | `/data/notes/logs/kshan/inbox`, `…/logs/rahi/inbox` | Pulse + monitors write the new one; the old one's `read/` is read for feedback |
@@ -209,6 +209,7 @@ Every path is also exported to command jobs as `KRONOS_<KEY>`.
 - **Kinds**: 5-field cron (robfig `ParseStandard`, local TZ) · `@startup` · `@daemon` · `@manual`. Invalid schedule or unknown job (no Go registration and no `command:`) → `FAIL` + alert at load, job skipped, others run.
 - **Queue**: one worker, strictly sequential. `busy` flag = never queued twice. Cron `next` is cleared on enqueue and recomputed from *finish* time (overruns skip slots). Jobs due in the same tick queue in `kronos.yml` order.
 - **Startup order**: `@startup` jobs (config order) → catch-ups (slot order) → normal schedule.
+- **Run reason**: the scheduler passes why a job runs to `Ctx.Reason` (`""` schedule, `start`, `changed: <file>`, `catch-up for …`; `kronos run` = `manual`).
 - **Run at start**: a cron job with `run_at_start: true` is also queued once at start, after the `@startup` jobs and before catch-ups (`kshan_weather`).
 - **Skip if busy**: a cron job with `skip_if_busy: true` that comes due while a job runs or waits is not queued: `SKIP Another job is running – this slot skipped`, next = next slot (`watch_rewards`).
 - **Catch-up**: cron jobs with `catch_up` (default true) and a state entry: if the latest slot within `catch_up_hours` (48) is after `last_run`, run once (`catch-up for <slot>`). No state entry → no catch-up. A failed run counts as a run.
@@ -228,7 +229,7 @@ Every path is also exported to command jobs as `KRONOS_<KEY>`.
 
 ### 6.1 Schedule plan (container time, TZ = Asia/Kolkata on the server)
 
-One worker runs jobs one at a time, so overlaps only queue; the plan keeps every slot free anyway. Lanes: **:00/:30** `pulse_watch` (08–22), **:10** `pulse_rollup`, **:15/:45** `kshan_events`, **:20/:50** `kshan_weather` (+ at start), **:40** `watch_rewards`. Daily jobs use the other minutes, ≥ 10 min apart, in dependency order.
+One worker runs jobs one at a time, so overlaps only queue; the plan keeps every slot free anyway. Lanes: **:00/:30** `pulse_watch` (08–22), **:10** `pulse_rollup`, **:15/:45** `kshan_events`, **:20** `kshan_weather` (+ at start, + on `location.md` change), **:40** `watch_rewards`. Daily jobs use the other minutes, ≥ 10 min apart, in dependency order.
 
 | Time | Job | Why there |
 |---|---|---|
@@ -247,7 +248,7 @@ One worker runs jobs one at a time, so overlaps only queue; the plan keeps every
 | */30 08–22 | `pulse_watch` | |
 | :10 hourly | `pulse_rollup` | `briefing_at` = 05:40 |
 | :15/:45 | `kshan_events` | drafts show up in event.md within 30 min |
-| :20/:50 + at start | `kshan_weather` | |
+| :20 hourly + at start + on change | `kshan_weather` | network call skipped while fresh (< 50 min) and the location is unchanged |
 | :40 hourly, skip if busy | `watch_rewards` | skipped at 05:40 when the briefing runs |
 | 11:15 | `watch_gold` | after the day's rate is published |
 | 11:35 | `watch_domains` | |
@@ -272,7 +273,7 @@ Paths relative to `/data/notes/`.
 | `nimo_briefing` | `inbox/daily.md`, `logs/pulse/state/brief.yml` | outbox briefing (+ `# Pulse` block) | — |
 | `pulse_watch` | today's `logs/kshan/daily/…`, goals, baseline, sent, `logs/kshan/inbox/read` (+ old) | snapshot, phone-inbox nudges, sent | — |
 | `pulse_rollup` | final `logs/kshan/daily/…` (+ `logs/rahi/daily` fallback, 70 days), goals | baseline, weekly/monthly, brief, warnings/reports, sent | `briefing_at` (05:40) |
-| `kshan_weather` | api.open-meteo.com | `logs/kshan/weather.md` | `lat` (12.925), `lon` (77.583), `place`, `hours` (5), `file`, `timezone` (Asia/Kolkata), `fail_hours` (6), `url` |
+| `kshan_weather` | `logs/kshan/weather/location.md`, api.open-meteo.com | `logs/kshan/weather/weather.md` | `location_file`, `weather_file`, `hours` (6), `every` (60), fallback `lat` (12.925) / `lon` (77.583) / `place` (Jayanagar, Bengaluru), `timezone` (Asia/Kolkata), `fail_hours` (6), `url` |
 | `kshan_events` | `logs/kshan/events.md` (+ `logs/rahi/events.md`), `event.md`, `event.md.bck` | `event.md` (new drafts only) | `max_age_days` (30) |
 | `watch_rewards` | rewards.bing.com/redeem/in (+ /shop, /donate, /win) | `logs/watch/rewards.yml`, outbox on change | `market`, `pages`, `notify_price` (true), `notify_removed` (false), `notify` ([telegram]) |
 | `watch_gold` | cleartax.in/gold-rate-{city} | `logs/watch/gold.yml`, outbox + phone inbox on change | `city` (bangalore), `karat` (22), `url`, `pattern`, `notify` |
@@ -406,18 +407,27 @@ HTTP: browser User-Agent, `timeout_s` (30), one retry after 5 s on network error
 
 ### 6.10 Kshan (`logs/kshan/`, package `internal/kshan`)
 
-**`kshan_weather`** — every 30 min (:20/:50) and at start. GET `<url>?latitude=<lat>&longitude=<lon>&current=temperature_2m,apparent_temperature,weather_code,is_day,relative_humidity_2m&hourly=temperature_2m,weather_code,precipitation_probability&daily=temperature_2m_min,temperature_2m_max,precipitation_probability_max&timezone=<timezone>&forecast_days=2` (30 s timeout). Writes `<file>` (default `logs/kshan/weather.md` under `paths.vault`) atomically, YAML built as nodes:
+**`kshan_weather`** — `@`start (`run_at_start`), hourly (:20) and on change of `logs/kshan/weather/location.md` (`watch:`; the scheduler waits until the file is unchanged for a tick, so Syncthing's temp-file writes settle first).
+
+1. **Location:** `location_file` (Kshan is its only writer; Kronos never writes it). YAML `{updated, lat, lon, accuracy_m, place, reason}`, plain or inside `---` frontmatter. Missing → the fallback options `lat`/`lon`/`place` silently; unreadable, or no valid lat/lon → the fallback with a WARN; no `place` → the fallback place.
+2. **Skip rule:** no network call when `weather_file` exists, is younger than `every` − 10 min (default 50 min) and `location.md` is not newer than it — unless the location's `reason` is `tap`. A dry run always fetches.
+3. **Fetch:** GET `<url>?latitude=<lat>&longitude=<lon>&current=temperature_2m,apparent_temperature,weather_code,is_day,relative_humidity_2m&hourly=temperature_2m,weather_code,precipitation_probability&daily=temperature_2m_min,temperature_2m_max,precipitation_probability_max&timezone=<timezone>&forecast_days=2` (30 s timeout).
+4. **Write** `weather_file` atomically, YAML built as nodes:
 
 ```yaml
 # Kshan weather - written by Kronos (open-meteo). YAML.
 updated: '2026-11-12 21:20:00'
 place: Jayanagar, Bengaluru
+lat: 12.925
+lon: 77.583
 now: {temp_c: 22.5, feels_c: 23.0, code: 2, text: Partly cloudy, is_day: false, humidity: 81.0}
 today: {min_c: 18.2, max_c: 29.0, rain_pct: 65.0}
-next: # the next 5 whole hours, nearest first
+next: # the next 6 whole hours after now, nearest first
   - {time: '22:00', temp_c: 21.9, code: 3, rain_pct: 20.0}
 ```
-Numbers to 1 decimal, codes as integers, times/dates single-quoted, `null` for a value open-meteo didn't give. `next` = the first `hours` hourly slots after `current.time`. Words: 0 Clear, 1 Mostly clear, 2 Partly cloudy, 3 Cloudy, 45/48 Fog, 51–57 Drizzle, 61–67 Rain, 80–82 Showers, 71–77/85/86 Snow, 95–99 Storm, else `—`. A failed fetch keeps the old file (WARN) and records `{since, alerted}` in `kshan_weather.fail.yml` next to `state.json`; once failing ≥ `fail_hours` (6) → one FAIL + alert; the next success deletes the mark ("Weather working again"). Dry run: prints the diff, writes nothing, no mark.
+Numbers to 1 decimal (lat/lon as given, up to 6 decimals), codes as integers, times/dates single-quoted, `null` for a value open-meteo didn't give. `next` = the first `hours` hourly slots after `current.time`. Words: 0 Clear, 1 Mostly clear, 2 Partly cloudy, 3 Cloudy, 45/48 Fog, 51–57 Drizzle, 61–67 Rain, 80–82 Showers, 71–77/85/86 Snow, 95–99 Storm, else `—`.
+5. **Log:** one line per run — `<place> (<lat>, <lon>): <temp> °C, <words> – <why>` or `SKIP … weather.md is N min old, location unchanged – <why>`; why = startup / hourly / location changed / manual (from `Ctx.Reason`).
+6. **Failures:** keep the old file (WARN) and record `{since, alerted}` in `kshan_weather.fail.yml` next to `state.json`; once failing ≥ `fail_hours` (6) → one FAIL + alert; the next success deletes the mark ("Weather working again"). Dry run: prints the diff, writes nothing, no mark.
 
 **`kshan_events`** — every 30 min (:15/:45). Reads `paths.kshan_events` (Kshan: `drafts: [{text, created}]`, text like `dentist fri 5pm`) and `paths.kshan_events_old` (RahiOS: `drafts: [{id, title, date, time, created}]`); missing file = nothing; unparseable → FAIL, nothing written. Kshan draft → `ParseWhen(text, created day)`: date words `today`, `tomorrow`/`tmrw`, weekdays (`fri` = on/after; `next fri` = after), `14 nov`, `nov 14 2027`, `14th november`, `15/12`, `2026-12-20`; times `5pm`, `5 pm`, `9:30am`, `17:00`, `noon`; linking `on`/`at`/`by` before them dropped; no date → the draft's day; a day/month already past → next year; the rest is the title (first letter capitalised). Id = `kshan-<created YYYYMMDD-HHMMSS>` (no stamp → `kshan-<sha1(text)[:10]>`); RahiOS drafts keep theirs. New ids (not in `event.md` or `event.md.bck`, draft not older than `max_age_days` 30) are appended as `{id, title (+ " HH:MM"), date, status: open, frequency: none, priority: medium}`; `event.md` is saved only when something was added. Kronos never writes the drafts files (Kshan can hide a draft whose `kshan-<created>` id is in `event.md`).
 
@@ -460,7 +470,7 @@ Remove a job: delete its files and its example/kronos.yml entries; a job-only pa
 - **jobs:** anchor drift, legacy normalisation, broken file never overwritten, dry run writes nothing, subscription event idempotency, calendar sync (fake Google: categories, times, multi-day, cancelled, sort, file kept on failure), agenda from calendar.md, partial agenda, arthik drafts window/dedupe/prune, health daily cards, briefing + Pulse block, registry = kronos.yml.example.
 - **pulse:** parse/nulls, medians, over/pattern, goals tighten/loosen/clamp, target, step forecast, plan/cap/quiet/defer, read feedback + back-off, rollup/report; jobs: goals start, warning once + defer, weekly report, observe-only, app/step nudges, bad log tolerated, `daily/` untouched, dry run prints + writes only in a sandbox; fixture patterns/determinism/refuses a non-fixture folder.
 - **pulse (1.2.2):** Kshan log without mindful/modes/created, folder fallbacks (day, dates, read feedback, off).
-- **kshan:** weather golden file, options, failures (warn → one alert at 6 h → recovery), dry run, WMO words; events import (Kshan + RahiOS, archived/old skipped, idempotent, drafts untouched), errors, fallback off; date phrases.
+- **kshan:** weather golden file, location.md parsing (missing/garbled/frontmatter → fallback), skip rule (fresh, newer location, tap, stale, dry run), run reason, options, failures (warn → one alert at 6 h → recovery), dry run, WMO words; events import (Kshan + RahiOS, archived/old skipped, idempotent, drafts untouched), errors, fallback off; date phrases.
 - **watch:** baseline + one message, same value → file untouched and no message, change → file + Telegram + phone inbox, notify option, dry run stores nothing, fail_after alert once + reset, partial fetch not stored; rewards cards/points/silent text change/options/merge; domains parsing, aliases, ranking, diff; gold pattern 22K/24K, missing rate, diff, end-to-end dry run.
 
 ---
@@ -505,6 +515,6 @@ Parity check (2026-10-05): an edge-case fixture set run through every Python tas
 | 1.1.1 | Pulse test tooling: pulse-fixture, `--now`, `--rahi-path` |
 | 1.1.2 | Monitors (watch_rewards, watch_gold, watch_domains), `skip_if_busy` |
 | 1.2.1 | Modules (Pulse jobs moved into `internal/pulse`), health site via `.env KRONOS_HEALTH_SITE`, schedule plan, docs folded in here |
-| 1.2.2 | Kshan replaces RahiOS: module `internal/kshan` (kshan_weather, kshan_events), phone paths as config (`daily_logs`, `phone_inbox`, `kshan_events` + `_old` fallbacks), Pulse files → `paths.pulse`, notify channel `kshan`, `run_at_start`, `--sandbox` |
+| 1.2.2 | Kshan replaces RahiOS: module `internal/kshan` (kshan_weather from Kshan's location.md with a skip rule, kshan_events), `Ctx.Reason`, phone paths as config (`daily_logs`, `phone_inbox`, `kshan_events` + `_old` fallbacks), Pulse files → `paths.pulse`, notify channel `kshan`, `run_at_start`, `--sandbox` |
 
 Ask for changes by sharing this file plus only the file(s) being changed.

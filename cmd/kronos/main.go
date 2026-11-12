@@ -176,7 +176,7 @@ func runJob(cfg *config.Config, args []string) int {
 // (pulse, daily_logs, phone_inbox) at one test folder and moves the outbox and logs there too,
 // so nothing reaches Telegram, the phone or your logs.
 func testOptions(cfg *config.Config, name string, dry bool, now, sandbox string) (scheduler.Options, error) {
-	o := scheduler.Options{DryRun: dry}
+	o := scheduler.Options{DryRun: dry, Reason: "manual"}
 	if sandbox != "" {
 		if !strings.HasPrefix(name, "pulse_") {
 			return o, fmt.Errorf("--sandbox is for the pulse_* jobs (other jobs would still touch real paths)")

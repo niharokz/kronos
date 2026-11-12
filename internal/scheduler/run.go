@@ -35,6 +35,7 @@ type Options struct {
 	DryRun  bool
 	Now     time.Time // zero = real time
 	Sandbox bool      // paths point at a test folder (see job.Ctx.Sandbox)
+	Reason  string    // why the scheduler runs it: "" (schedule), "start", "changed: <file>", "catch-up …"
 }
 
 // ExecuteWith is Execute with manual-run overrides.
@@ -60,7 +61,7 @@ func ExecuteWith(cfg *config.Config, j config.Job, o Options, out io.Writer) err
 	if !o.Now.IsZero() { // --now: test time-of-day rules
 		c.Now, c.Today = o.Now, dates.Today(o.Now)
 	}
-	c.Sandbox = o.Sandbox
+	c.Sandbox, c.Reason = o.Sandbox, o.Reason
 	done := make(chan error, 1)
 	go func() {
 		defer func() {

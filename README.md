@@ -73,13 +73,13 @@ Any job can also have `watch: [files]`: it then runs again ~10–20 s after one 
 | `nimo_briefing` | daily 05:40 | Sends the agenda as a *briefing* — the bot posts it and adds an AI commentary. With Pulse set up, its brief (yesterday's verdict, today's targets) is appended. |
 | `pulse_watch` | every 30 min, 08:00–22:30 | Pulse: snapshots today's phone log; nudges an app past its usual while on a strike pattern, and steps when you're unlikely to finish. |
 | `pulse_rollup` | hourly at :10 | Pulse: for each phone day that turned final — baselines, self-tightening goals, pattern warnings, weekly/monthly rollups and reports; refreshes the briefing part. |
-| `kshan_weather` | every 30 min at :20/:50, and at start | Kshan: today's weather from open-meteo into `logs/kshan/weather.md` for the phone's Clock widget. |
+| `kshan_weather` | hourly at :20, at start, and when the phone's location changes | Kshan: weather for the phone's location (`logs/kshan/weather/location.md`) from open-meteo into `logs/kshan/weather/weather.md` for the Clock widget. |
 | `kshan_events` | every 30 min at :15/:45 | Kshan: event drafts typed on the phone (`e dentist fri 5pm`) become events in `event.md`. |
 | `watch_rewards` | hourly at :40, skipped when busy | Monitor: new items and points changes in the public Microsoft Rewards (India) catalog. |
 | `watch_gold` | daily 11:15 | Monitor: gold rate per gram (default 22K, Bangalore). |
 | `watch_domains` | daily 11:35 | Monitor: cheapest registrar per TLD (default `.ar`, transfer + 1st renewal). |
 
-The defaults are spread so that nothing waits: lanes at :00/:30 (`pulse_watch`), :10 (`pulse_rollup`), :15/:45 (`kshan_events`), :20/:50 (`kshan_weather`) and :40 (`watch_rewards`), and the nightly jobs 10 minutes apart in dependency order (subscriptions before Arthik drafts and events, everything before the agenda, the agenda and Pulse before the briefing).
+The defaults are spread so that nothing waits: lanes at :00/:30 (`pulse_watch`), :10 (`pulse_rollup`), :15/:45 (`kshan_events`), :20 (`kshan_weather`) and :40 (`watch_rewards`), and the nightly jobs 10 minutes apart in dependency order (subscriptions before Arthik drafts and events, everything before the agenda, the agenda and Pulse before the briefing).
 
 `kronos jobs` lists the built-in jobs; options per job are documented at the top of its file (`internal/jobs/`, `internal/pulse/job_*.go`, `internal/watch/`).
 
@@ -294,10 +294,10 @@ Kshan is the phone's widget app (it replaced the RahiOS launcher). It never goes
 
 | Job | Reads | Writes |
 |---|---|---|
-| `kshan_weather` | open-meteo (no key) | `logs/kshan/weather.md`: now (temp, feels like, words, day/night, humidity), today's min/max/rain chance, the next 5 hours |
+| `kshan_weather` | `logs/kshan/weather/location.md` (Kshan's last location), open-meteo (no key) | `logs/kshan/weather/weather.md`: place, lat/lon, now (temp, feels like, words, day/night, humidity), today's min/max/rain chance, the next 6 hours |
 | `kshan_events` | `logs/kshan/events.md` — drafts from the `e` command (and RahiOS's old `logs/rahi/events.md`) | new events in `data/event.md` |
 
-- **Weather options:** `lat`, `lon`, `place` (default Jayanagar, Bengaluru), `hours` (5), `file` (relative = in the vault), `timezone` (Asia/Kolkata), `fail_hours` (6). If open-meteo is down the old file stays; only after 6 hours of failures one alert is sent.
+- **Weather:** reads Kshan's `location.md` (`lat`, `lon`, `place`, `reason`; never written by Kronos) and runs at start, hourly and about 10–20 s after that file changes. No network call while `weather.md` is under 50 minutes old and the location hasn't changed — a location sent with `reason: tap` always fetches. Options: `location_file`, `weather_file` (relative = in the vault), `hours` (6), `every` (60), fallback `lat`/`lon`/`place` (12.925, 77.583, Jayanagar, Bengaluru) for when `location.md` is missing or unreadable, `timezone` (Asia/Kolkata), `fail_hours` (6). If open-meteo is down the old file stays; only after 6 hours of failures one alert is sent. Each run logs one line: place, lat/lon, temperature and why it ran (startup / hourly / location changed).
 - **Event drafts:** `e dentist fri 5pm` → *Dentist 17:00* on the coming Friday. Understood: `today`, `tomorrow`, weekdays (`fri`, `next fri`), `14 nov`, `nov 14 2027`, `15/12`, `2026-12-20`, `5pm`, `9:30am`, `17:00`, `noon`. No date → the day you typed it. Each draft is imported once (id `kshan-<when it was typed>`); drafts older than `max_age_days` (30) are ignored. Kronos never edits the drafts file.
 - **Paths** (all in `kronos.yml`): `daily_logs`, `phone_inbox`, `kshan_events`, each with an `_old` RahiOS fallback that is only read (set it to `""` to drop it); Pulse's own files in `pulse`.
 

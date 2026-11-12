@@ -21,17 +21,22 @@ import (
 	"gitlab.com/niharokz/kronos/internal/store"
 )
 
-// kshan_weather writes the phone's weather file (Kshan Clock widget) from open-meteo (no key).
-// Kshan never goes online for weather; it only reads this file.
+// kshan_weather writes the phone's weather file (Kshan Clock widget) from open-meteo (no key)
+// for the place in Kshan's location.md. Kshan never goes online for weather.
+//
+// Runs at start, hourly, and when location.md changes (kronos.yml: run_at_start + watch).
+// Skips the network call while location.md is unchanged and weather.md is younger than
+// `every` − 10 min (default 60 → 50 min); a location.md with `reason: tap` always fetches.
 //
 // Options:
-//   lat, lon     12.925, 77.583
-//   place        "Jayanagar, Bengaluru"     shown on the widget
-//   hours        5                          next whole hours listed
-//   file         logs/kshan/weather.md      relative = in the vault (paths.vault)
-//   timezone     Asia/Kolkata               open-meteo's local time for `next`
-//   fail_hours   6                          failed fetches in a row for this long → one alert
-//   url          https://api.open-meteo.com/v1/forecast
+//   location_file  logs/kshan/weather/location.md   Kshan writes it (updated, lat, lon, accuracy_m, place, reason); never written here
+//   weather_file   logs/kshan/weather/weather.md    relative = in the vault (paths.vault)
+//   hours          6                                next whole hours listed
+//   every          60                               minutes between refreshes (with the hourly schedule)
+//   lat, lon, place  12.925, 77.583, "Jayanagar, Bengaluru"   used when location.md is missing or unreadable
+//   timezone       Asia/Kolkata                     open-meteo's local time for `next`
+//   fail_hours     6                                failed fetches in a row for this long → one alert
+//   url            https://api.open-meteo.com/v1/forecast
 //
 // A failed fetch keeps the old file (WARN); after fail_hours of failures one FAIL + alert.
 
@@ -39,13 +44,33 @@ func init() { job.Register("kshan_weather", kshanWeather) }
 
 const openMeteo = "https://api.open-meteo.com/v1/forecast"
 
+// Location is where to fetch the weather for.
+type Location struct {
+	Lat, Lon float64
+	Place    string
+	Reason   string // Kshan's reason for writing it, e.g. "tap"
+	Fallback bool   // from the options, not location.md
+}
+
 func kshanWeather(c *job.Ctx) error {
-	path := c.VaultFile("file", "logs/kshan/weather.md") // kronos.yml: jobs.kshan_weather.options.file
-	f, err := fetchForecast(c)
+	locPath := c.VaultFile("location_file", "logs/kshan/weather/location.md") // kronos.yml: jobs.kshan_weather.options
+	path := c.VaultFile("weather_file", "logs/kshan/weather/weather.md")
+	why := runReason(c)
+
+	loc, problem := readLocation(locPath, fallbackLocation(c))
+	if problem != "" {
+		c.Log.Warn("%s – using %s", problem, loc.Place)
+	}
+	if fresh, age := isFresh(path, locPath, loc, c.Int("every", 60), c.Now); fresh && !c.DryRun {
+		c.Log.Skip("%s (%.4g, %.4g): weather.md is %d min old, location unchanged – %s", loc.Place, loc.Lat, loc.Lon, int(age.Minutes()), why)
+		return nil
+	}
+
+	f, err := fetchForecast(c, loc)
 	if err != nil {
 		return weatherFailed(c, err)
 	}
-	data, err := weatherYAML(f, c.String("place", "Jayanagar, Bengaluru"), c.Int("hours", 5), c.Now)
+	data, err := weatherYAML(f, loc, c.Int("hours", 6), c.Now)
 	if err != nil {
 		return weatherFailed(c, err)
 	}
@@ -56,8 +81,86 @@ func kshanWeather(c *job.Ctx) error {
 	if err := c.WriteFile(path, data); err != nil {
 		return err
 	}
-	c.Log.OK("%s, %.1f °C, %s", f.Current.text(), round1(f.Current.Temp), path)
+	c.Log.OK("%s (%.4g, %.4g): %.1f °C, %s – %s", loc.Place, loc.Lat, loc.Lon, round1(f.Current.Temp), f.Current.text(), why)
 	return nil
+}
+
+// runReason says why this run happened, for the log line.
+func runReason(c *job.Ctx) string {
+	switch r := c.Reason; {
+	case r == "start":
+		return "startup"
+	case strings.HasPrefix(r, "changed:"):
+		return "location changed"
+	case r == "":
+		return "hourly"
+	default:
+		return r // manual, catch-up …
+	}
+}
+
+func fallbackLocation(c *job.Ctx) Location {
+	lat, _ := strconv.ParseFloat(c.String("lat", "12.925"), 64) // kronos.yml: jobs.kshan_weather.options.lat/lon/place
+	lon, _ := strconv.ParseFloat(c.String("lon", "77.583"), 64)
+	return Location{Lat: lat, Lon: lon, Place: c.String("place", "Jayanagar, Bengaluru"), Fallback: true}
+}
+
+// readLocation reads Kshan's location.md; missing or unusable → the fallback and a reason why.
+func readLocation(path string, fallback Location) (Location, string) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return fallback, ""
+	}
+	if err != nil {
+		return fallback, fmt.Sprintf("%s: %v", filepath.Base(path), err)
+	}
+	var doc struct {
+		Lat    *float64 `yaml:"lat"`
+		Lon    *float64 `yaml:"lon"`
+		Place  string   `yaml:"place"`
+		Reason string   `yaml:"reason"`
+	}
+	if err := yaml.Unmarshal(stripFrontmatter(raw), &doc); err != nil {
+		return fallback, fmt.Sprintf("%s unreadable (%v)", filepath.Base(path), err)
+	}
+	if doc.Lat == nil || doc.Lon == nil || *doc.Lat < -90 || *doc.Lat > 90 || *doc.Lon < -180 || *doc.Lon > 180 {
+		return fallback, filepath.Base(path) + " has no valid lat/lon"
+	}
+	loc := Location{Lat: *doc.Lat, Lon: *doc.Lon, Place: strings.TrimSpace(doc.Place), Reason: strings.TrimSpace(doc.Reason)}
+	if loc.Place == "" {
+		loc.Place = fallback.Place
+	}
+	return loc, ""
+}
+
+// stripFrontmatter accepts both plain YAML and a markdown file with a --- frontmatter block.
+func stripFrontmatter(raw []byte) []byte {
+	s := strings.TrimPrefix(string(raw), "\ufeff")
+	if !strings.HasPrefix(s, "---") {
+		return []byte(s)
+	}
+	rest := strings.TrimPrefix(strings.TrimPrefix(s, "---"), "\n")
+	if i := strings.Index(rest, "\n---"); i >= 0 {
+		return []byte(rest[:i+1])
+	}
+	return []byte(rest)
+}
+
+// isFresh: no fetch needed — weather.md is younger than every−10 min, location.md is not newer
+// than it, and the location isn't a tap. Returns weather.md's age.
+func isFresh(weatherPath, locPath string, loc Location, every int, now time.Time) (bool, time.Duration) {
+	w, err := os.Stat(weatherPath)
+	if err != nil {
+		return false, 0
+	}
+	age := now.Sub(w.ModTime())
+	if loc.Reason == "tap" || age < 0 || age >= time.Duration(every-10)*time.Minute {
+		return false, age
+	}
+	if l, err := os.Stat(locPath); err == nil && l.ModTime().After(w.ModTime()) {
+		return false, age // location.md changed since the last fetch
+	}
+	return true, age
 }
 
 // ── open-meteo response ─────────────────────────────────────────────────
@@ -88,11 +191,11 @@ type current struct {
 
 func (c current) text() string { return wmoText(c.Code) }
 
-func fetchForecast(c *job.Ctx) (forecast, error) {
+func fetchForecast(c *job.Ctx, loc Location) (forecast, error) {
 	var f forecast
 	q := url.Values{}
-	q.Set("latitude", c.String("lat", "12.925")) // kronos.yml: jobs.kshan_weather.options.lat/lon
-	q.Set("longitude", c.String("lon", "77.583"))
+	q.Set("latitude", coord(loc.Lat))
+	q.Set("longitude", coord(loc.Lon))
 	q.Set("current", "temperature_2m,apparent_temperature,weather_code,is_day,relative_humidity_2m")
 	q.Set("hourly", "temperature_2m,weather_code,precipitation_probability")
 	q.Set("daily", "temperature_2m_min,temperature_2m_max,precipitation_probability_max")
@@ -130,10 +233,12 @@ func fetchForecast(c *job.Ctx) (forecast, error) {
 const weatherHeader = "# Kshan weather - written by Kronos (open-meteo). YAML.\n"
 
 // weatherYAML renders the file: dates/times single-quoted, numbers to 1 decimal, null when missing.
-func weatherYAML(f forecast, place string, hours int, now time.Time) ([]byte, error) {
+func weatherYAML(f forecast, loc Location, hours int, now time.Time) ([]byte, error) {
 	root := store.NewMapping()
 	store.Set(root, "updated", store.Quoted(now.Format("2006-01-02 15:04:05")))
-	store.Set(root, "place", store.Str(place))
+	store.Set(root, "place", store.Str(loc.Place))
+	store.Set(root, "lat", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!float", Value: coord(loc.Lat)})
+	store.Set(root, "lon", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!float", Value: coord(loc.Lon)})
 
 	cur := flowMap(
 		"temp_c", numNode(f.Current.Temp),
@@ -170,7 +275,7 @@ func weatherYAML(f forecast, place string, hours int, now time.Time) ([]byte, er
 		))
 	}
 	store.Set(root, "next", next)
-	keyNode(root, "next").LineComment = fmt.Sprintf("# the next %d whole hours, nearest first", hours)
+	keyNode(root, "next").LineComment = fmt.Sprintf("# the next %d whole hours after now, nearest first", hours)
 
 	var b bytes.Buffer
 	b.WriteString(weatherHeader)
@@ -254,6 +359,15 @@ func boolNode(v *int) *yaml.Node {
 		return null()
 	}
 	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: strconv.FormatBool(*v == 1)}
+}
+
+// coord writes a latitude/longitude as given (up to 6 decimals, no trailing zeros).
+func coord(v float64) string {
+	s := strconv.FormatFloat(math.Round(v*1e6)/1e6, 'f', -1, 64)
+	if !strings.Contains(s, ".") {
+		s += ".0"
+	}
+	return s
 }
 
 func round1(v *float64) float64 {

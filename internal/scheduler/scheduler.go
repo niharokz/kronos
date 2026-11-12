@@ -296,7 +296,7 @@ func (s *Scheduler) execute(t *task, reason string) {
 	logger.Start("%s", desc)
 
 	started := time.Now()
-	err := Execute(s.cfg, t.job, false, s.out)
+	err := ExecuteWith(s.cfg, t.job, Options{Reason: reason}, s.out)
 	if recErr := state.Record(s.cfg.Paths["state"], t.job.Name, started, time.Since(started), err); recErr != nil {
 		s.log.Warn("State not saved: %v", recErr)
 	}

@@ -57,7 +57,7 @@ jobs:
 # ── Schedule plan (container time, TZ) ─────────────────────────────────
 # Kronos runs one job at a time, so jobs never overlap; slots are spread so
 # that nothing waits. Half-hourly/hourly lanes: :00/:30 pulse_watch (08–22), :10 pulse_rollup,
-# :15/:45 kshan_events, :20/:50 kshan_weather, :40 watch_rewards. Nightly chain, 10 min apart:
+# :15/:45 kshan_events, :20 kshan_weather (+ start, + location change), :40 watch_rewards. Nightly chain, 10 min apart:
 #   02:05 untitled_import   02:15 inbox_archive     02:25 event_archive
 #   02:35 subscription_update → 02:45 arthik_subscriptions → 02:55 event_update
 #   03:15 calendar_sync     03:25 health_website    03:35 daily_update
@@ -149,15 +149,18 @@ jobs:
 
   # ── Kshan (internal/kshan): the phone's widget app ──
 
-  # Weather for the Clock widget: open-meteo → logs/kshan/weather.md (also once at start)
+  # Weather for the Clock widget: Kshan's location.md → open-meteo → weather.md.
+  # Runs at start, hourly and ~10–20 s after location.md changes; skips the call while
+  # weather.md is < every−10 min old and the location is unchanged (reason: tap always fetches).
   kshan_weather:
-    schedule: "20,50 * * * *"
+    schedule: "20 * * * *"
     run_at_start: true
+    watch: [/data/notes/logs/kshan/weather/location.md]
     catch_up: false
     timeout: 120
     description: "Kshan: weather file from open-meteo."
-    options: { lat: 12.925, lon: 77.583, place: "Jayanagar, Bengaluru", hours: 5 }
-    # more options: { file: logs/kshan/weather.md, timezone: Asia/Kolkata, fail_hours: 6 }
+    options: { hours: 6, lat: 12.925, lon: 77.583, place: "Jayanagar, Bengaluru" }   # lat/lon/place: fallback when location.md is missing
+    # more options: { location_file: logs/kshan/weather/location.md, weather_file: logs/kshan/weather/weather.md, every: 60, timezone: Asia/Kolkata, fail_hours: 6 }
 
   # Event drafts typed on the phone (`e dentist fri 5pm`) → data/event.md
   kshan_events:
