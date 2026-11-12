@@ -136,7 +136,7 @@ func Write(o Options) ([]string, error) {
 	for i := o.Days; i >= 1; i-- {
 		d := o.Today.AddDate(0, 0, -i)
 		lf, steps := day(r, o, d, i, 1)
-		if err := save(pulse.DayFile(o.Out, d), "Rahi daily log (fake — kronos pulse-fixture)", lf); err != nil {
+		if err := save(pulse.DayFile(filepath.Join(o.Out, "daily"), d), "Rahi daily log (fake — kronos pulse-fixture)", lf); err != nil {
 			return nil, err
 		}
 		if steps > 0 { // the step forecast learns from these
@@ -154,7 +154,7 @@ func Write(o Options) ([]string, error) {
 				lf.Health.Steps = o.TodaySteps
 			}
 		}
-		if err := save(pulse.DayFile(o.Out, o.Today), "Rahi daily log (fake — kronos pulse-fixture)", lf); err != nil {
+		if err := save(pulse.DayFile(filepath.Join(o.Out, "daily"), o.Today), "Rahi daily log (fake — kronos pulse-fixture)", lf); err != nil {
 			return nil, err
 		}
 	}

@@ -15,7 +15,7 @@ const fixtureUsage = `kronos pulse-fixture — write fake Rahi logs for testing 
 
   kronos pulse-fixture --out DIR [options]
 
-Then: kronos run pulse_rollup --rahi-path DIR --now 'YYYY-MM-DD HH:MM' --dry-run
+Then: kronos run pulse_rollup --sandbox DIR --now 'YYYY-MM-DD HH:MM' --dry-run
 Day offsets count back from --today (1 = yesterday).
 
 Options:`

@@ -13,7 +13,7 @@ import (
 func TestBriefingAppendsPulse(t *testing.T) {
 	c, dir, _ := testCtx(t, "2026-10-21", false)
 	rahi := filepath.Join(dir, "rahi")
-	c.Cfg.Paths["rahi"] = rahi
+	c.Cfg.Paths["pulse"] = rahi
 	_ = os.MkdirAll(filepath.Join(rahi, "state"), 0o755)
 	_ = os.MkdirAll(filepath.Join(dir, "outbox"), 0o755)
 	put(t, filepath.Join(dir, "daily.md"), "# Overdue\n\n# Due Today\nEVENT: X\n\n# Upcoming\n")

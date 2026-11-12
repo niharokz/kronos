@@ -7,15 +7,17 @@ import (
 	"gitlab.com/niharokz/kronos/internal/config"
 )
 
-// --rahi-path moves rahi, outbox and logs into the sandbox; --now on real data needs --dry-run.
+// --sandbox moves Pulse's folders, outbox and logs into the test folder; --now on real data needs --dry-run.
 func TestTestOptions(t *testing.T) {
-	cfg := &config.Config{Paths: map[string]string{"rahi": "/real/rahi", "outbox": "/real/outbox", "logs": "/real/logs"}}
+	cfg := &config.Config{Paths: map[string]string{"pulse": "/real/pulse", "daily_logs": "/real/daily", "daily_logs_old": "/real/old",
+		"phone_inbox": "/real/inbox", "outbox": "/real/outbox", "logs": "/real/logs"}}
 	sb := t.TempDir()
 	o, err := testOptions(cfg, "pulse_watch", false, "2026-11-30 19:00", sb)
 	if err != nil || !o.Sandbox || o.Now.Format("2006-01-02 15:04") != "2026-11-30 19:00" {
 		t.Fatalf("%+v %v", o, err)
 	}
-	if cfg.Paths["rahi"] != sb || cfg.Paths["outbox"] != filepath.Join(sb, "_outbox") || cfg.Paths["logs"] != "" {
+	if cfg.Paths["pulse"] != sb || cfg.Paths["daily_logs"] != filepath.Join(sb, "daily") || cfg.Paths["daily_logs_old"] != "" ||
+		cfg.Paths["phone_inbox"] != filepath.Join(sb, "inbox") || cfg.Paths["outbox"] != filepath.Join(sb, "_outbox") || cfg.Paths["logs"] != "" {
 		t.Errorf("paths %v", cfg.Paths)
 	}
 

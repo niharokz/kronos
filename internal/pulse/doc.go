@@ -1,8 +1,8 @@
-// Package pulse is Kronos's digital + health coach over Rahi's daily logs (module "pulse").
+// Package pulse is Kronos's digital + health coach over the phone's daily logs (Kshan; RahiOS before) (module "pulse").
 //
 // Rules (pure; read files, return values):
 //
-//	day.go       one Rahi daily log → Day (null = missing, never 0)
+//	day.go       one daily log → Day (null = missing, never 0)
 //	goals.go     goals.md: limits, tracked apps, quiet hours, message cap
 //	baseline.go  baseline.md: medians, goals, strikes, targets
 //	intraday.go  state/intraday-*.yml snapshots and the step forecast
@@ -18,5 +18,6 @@
 //	job_rollup.go  pulse_rollup – final days → baselines, goals, warnings, rollups, brief
 //
 // fixture/ writes fake Rahi logs for testing (kronos pulse-fixture).
-// Kronos never writes to <paths.rahi>/daily/.
+// Folders (kronos.yml paths, see dirs.go): pulse (own files), daily_logs (+ daily_logs_old, RahiOS,
+// read only), phone_inbox (+ phone_inbox_old for read feedback). Kronos never writes to the daily logs.
 package pulse

@@ -8,7 +8,8 @@ import (
 
 	"gitlab.com/niharokz/kronos/internal/config"
 	"gitlab.com/niharokz/kronos/internal/job"
-	_ "gitlab.com/niharokz/kronos/internal/pulse" // every module's jobs are listed in the example
+	_ "gitlab.com/niharokz/kronos/internal/kshan" // every module's jobs are listed in the example
+	_ "gitlab.com/niharokz/kronos/internal/pulse"
 	_ "gitlab.com/niharokz/kronos/internal/watch"
 )
 

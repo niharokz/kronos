@@ -18,7 +18,7 @@ import (
 func pulseFixture(t *testing.T, c *job.Ctx, root string, n, bad int) string {
 	t.Helper()
 	dir := filepath.Join(root, "rahi")
-	c.Cfg.Paths["rahi"] = dir
+	SandboxPaths(c.Cfg.Paths, dir)
 	c.Cfg.Paths["outbox"] = filepath.Join(root, "outbox")
 	_ = os.MkdirAll(filepath.Join(dir, "daily"), 0o755)
 	_ = os.MkdirAll(c.Cfg.Paths["outbox"], 0o755)
@@ -36,7 +36,7 @@ func pulseFixture(t *testing.T, c *job.Ctx, root string, n, bad int) string {
 
 func writeRahiDay(t *testing.T, dir string, d time.Time, final bool, screen, insta, steps int) {
 	t.Helper()
-	put(t, DayFile(dir, d), fmt.Sprintf(`# Rahi daily log
+	put(t, DayFile(filepath.Join(dir, "daily"), d), fmt.Sprintf(`# Rahi daily log
 date: '%s'
 final: %v
 health: { steps: %d, sleep: { start: '23:30', end: '06:30', min: 420 } }
@@ -137,7 +137,7 @@ func TestPulseWeeklyRollup(t *testing.T) {
 	if !ok || r.DaysLogged != 7 || *r.Metrics["screen"].Median != 200 {
 		t.Fatalf("weekly rollup %+v", r)
 	}
-	if _, err := os.Stat(InboxFile(dir, "week-2026-w43")); err != nil {
+	if _, err := os.Stat(InboxFile(filepath.Join(dir, "inbox"), "week-2026-w43")); err != nil {
 		t.Error("short weekly report not in the inbox")
 	}
 	sent, _ := LoadSent(SentFile(dir))

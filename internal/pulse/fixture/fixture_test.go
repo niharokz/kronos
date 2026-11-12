@@ -21,7 +21,7 @@ func TestWritePatterns(t *testing.T) {
 		t.Fatalf("%v %v", lines, err)
 	}
 	day := func(ago int) pulse.Day {
-		d, ok, err := pulse.LoadDay(pulse.DayFile(out, today.AddDate(0, 0, -ago)))
+		d, ok, err := pulse.LoadDay(pulse.DayFile(filepath.Join(out, "daily"), today.AddDate(0, 0, -ago)))
 		if !ok || err != nil {
 			t.Fatalf("day %d: %v", ago, err)
 		}
@@ -83,7 +83,7 @@ func TestWriteDeterministicAndSafe(t *testing.T) {
 	today, _ := dates.ParseISO("2026-11-30")
 	out := filepath.Join(t.TempDir(), "sb")
 	read := func() string {
-		b, _ := os.ReadFile(pulse.DayFile(out, today.AddDate(0, 0, -7)))
+		b, _ := os.ReadFile(pulse.DayFile(filepath.Join(out, "daily"), today.AddDate(0, 0, -7)))
 		return string(b)
 	}
 	if _, err := Write(Options{Out: out, Today: today, Days: 10}); err != nil {

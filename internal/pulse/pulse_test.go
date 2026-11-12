@@ -159,7 +159,7 @@ func TestReadFeedbackAndBackOff(t *testing.T) {
 	_ = os.MkdirAll(read, 0o755)
 	os.WriteFile(filepath.Join(read, "nudge-insta-20261020_20261020.md"), []byte("---\nid: nudge-insta-20261020\nread_at: '2026-10-20 18:02'\ndismissed: true\n---\nx\n"), 0o644)
 	os.WriteFile(filepath.Join(read, "nudge-insta-20261021_20261022-2.md"), []byte("# old file without fields\n"), 0o644)
-	items := LoadRead(dir)
+	items := LoadRead(filepath.Join(dir, "inbox"))
 	byID := map[string]ReadItem{}
 	for _, it := range items {
 		byID[it.ID] = it
@@ -214,5 +214,57 @@ func TestSmallHelpers(t *testing.T) {
 	if ISOWeek(day("2026-10-25")) != "2026-W43" || Slug("YouTube Music!") != "youtube-music" || Num(12345.6) != "12,346" ||
 		MedianClock([]string{"07:00", "08:00", ""}) != "07:30" {
 		t.Error("helpers")
+	}
+}
+
+// Kshan's daily log: the RahiOS schema without mindful, modes and created — read as missing, not zero.
+func TestParseKshanDay(t *testing.T) {
+	d, err := ParseDay([]byte(`# Kshan daily log - written by Kshan only (schema: docs/kshan-daily-log.md). YAML.
+date: '2026-11-12'
+updated: '2026-11-13 00:05:00'
+final: true
+health: null
+health_error: no_data
+screen: {total_min: 210, screen_on_min: 230, unlocks: 58, first_use: '07:10', last_use: '23:40', over_sleep_at: null}
+apps:
+- {pkg: com.instagram.android, name: Instagram, min: 40, opens: 12, notifications: 9}
+notifications: {total: 9, by_app: []}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Steps != nil || d.SleepMin != nil || *d.ScreenMin != 210 || len(d.TurnedBack) != 0 || !d.Final {
+		t.Errorf("%+v", d)
+	}
+	if v := d.Value(AppMetric("com.instagram.android")); v == nil || *v != 40 {
+		t.Errorf("app minutes %v", v)
+	}
+}
+
+// New folders first; the old (RahiOS) folder fills in days the new one doesn't have.
+func TestDirsFallback(t *testing.T) {
+	root := t.TempDir()
+	dirs := Dirs{Home: root, Daily: filepath.Join(root, "kshan", "daily"), DailyOld: filepath.Join(root, "rahi", "daily"),
+		Inbox: filepath.Join(root, "kshan", "inbox"), InboxOld: filepath.Join(root, "rahi", "inbox")}
+	d1, d2 := time.Date(2026, 11, 10, 0, 0, 0, 0, time.Local), time.Date(2026, 11, 11, 0, 0, 0, 0, time.Local)
+	for _, p := range []string{DayFile(dirs.DailyOld, d1), DayFile(dirs.DailyOld, d2), DayFile(dirs.Daily, d2)} {
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		_ = os.WriteFile(p, []byte("date: '"+filepath.Base(p)[:8]+"'\n"), 0o644)
+	}
+	if dirs.Day(d1) != DayFile(dirs.DailyOld, d1) || dirs.Day(d2) != DayFile(dirs.Daily, d2) {
+		t.Errorf("Day: %s %s", dirs.Day(d1), dirs.Day(d2))
+	}
+	if ds, _ := LogDates(dirs.Daily, dirs.DailyOld); len(ds) != 2 {
+		t.Errorf("LogDates %v", ds)
+	}
+	for _, p := range []string{filepath.Join(dirs.Inbox, "read", "a_20261111.md"), filepath.Join(dirs.InboxOld, "read", "b_20261101.md")} {
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		_ = os.WriteFile(p, []byte("x\n"), 0o644)
+	}
+	if r := LoadRead(dirs.Inbox, dirs.InboxOld); len(r) != 2 {
+		t.Errorf("LoadRead %v", r)
+	}
+	if dirs.DailyOld = ""; dirs.Day(d1) != DayFile(dirs.Daily, d1) {
+		t.Error("fallback used although off")
 	}
 }

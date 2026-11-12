@@ -24,7 +24,7 @@ func init() { Register(domainsWatcher) }
 var domainsWatcher = Watcher[Domains]{
 	Name:   "domains",
 	Title:  "Domain prices",
-	Notify: []string{Telegram, Rahi},
+	Notify: []string{Telegram, Phone},
 	Fetch:  fetchDomains,
 	Show:   showDomains,
 	Diff:   diffDomains,

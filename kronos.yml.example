@@ -15,6 +15,7 @@
 #   timeout:     seconds before the run is abandoned/killed (default settings.timeout_seconds)
 #   catch_up:    false to NOT run a missed slot after downtime (default true)
 #   skip_if_busy: true to skip a slot (not wait) while another job is running
+#   run_at_start: true to also run once each time Kronos starts (cron jobs)
 #   watch:       [files] — also run ~10–20 s after any of them changes
 #   command:     [program, args...] — run this instead of a built-in Go job
 #   options:     job-specific settings (see each job's file)
@@ -32,7 +33,15 @@ paths:
   archive: /data/notes/archive
   daily: /data/notes/inbox/daily.md
   finance_inbox: /data/notes/data/finance/inbox  # Arthik's inbox: Kronos writes kronos.md there
-  rahi: /data/notes/logs/rahi                    # Rahi folder: Pulse reads daily/, writes baseline/state/weekly/monthly/inbox
+  vault: /data/notes                             # notes vault root (relative file options resolve here)
+  # Phone (Kshan; RahiOS before it). *_old = RahiOS folders, read only as a fallback; set "" to drop.
+  daily_logs: /data/notes/logs/kshan/daily       # Kshan's daily logs (Pulse reads; Kronos never writes)
+  daily_logs_old: /data/notes/logs/rahi/daily
+  phone_inbox: /data/notes/logs/kshan/inbox      # messages for the phone (Pulse nudges, monitors)
+  phone_inbox_old: /data/notes/logs/rahi/inbox   # only its read/ (feedback on older nudges)
+  kshan_events: /data/notes/logs/kshan/events.md # Kshan's `e` drafts → event.md (kshan_events)
+  kshan_events_old: /data/notes/logs/rahi/events.md
+  pulse: /data/notes/logs/pulse                  # Pulse's own files: goals.md, baseline.md, state/, weekly/, monthly/
   watch: /data/notes/logs/watch                  # monitors (watch_*): last values, failure counts
   health_site: /data/health-site                # .env KRONOS_HEALTH_SITE is mounted here (health_website)
   google_token: /app/config/token.json
@@ -47,8 +56,8 @@ settings:
 jobs:
 # ── Schedule plan (container time, TZ) ─────────────────────────────────
 # Kronos runs one job at a time, so jobs never overlap; slots are spread so
-# that nothing waits. Hourly lanes: :00/:30 pulse_watch (08–22), :10 pulse_rollup,
-# :50 watch_rewards. Nightly chain, 10 min apart, in dependency order:
+# that nothing waits. Half-hourly/hourly lanes: :00/:30 pulse_watch (08–22), :10 pulse_rollup,
+# :15/:45 kshan_events, :20/:50 kshan_weather, :40 watch_rewards. Nightly chain, 10 min apart:
 #   02:05 untitled_import   02:15 inbox_archive     02:25 event_archive
 #   02:35 subscription_update → 02:45 arthik_subscriptions → 02:55 event_update
 #   03:15 calendar_sync     03:25 health_website    03:35 daily_update
@@ -135,19 +144,38 @@ jobs:
   # Final days → baselines, goals, warnings, weekly/monthly rollups, briefing part
   pulse_rollup:
     schedule: "10 * * * *"
-    description: "Pulse: baselines, goals and rollups from final Rahi days."
+    description: "Pulse: baselines, goals and rollups from final phone days."
     # options: { briefing_at: '05:40' }   # keep equal to nimo_briefing's time
+
+  # ── Kshan (internal/kshan): the phone's widget app ──
+
+  # Weather for the Clock widget: open-meteo → logs/kshan/weather.md (also once at start)
+  kshan_weather:
+    schedule: "20,50 * * * *"
+    run_at_start: true
+    catch_up: false
+    timeout: 120
+    description: "Kshan: weather file from open-meteo."
+    options: { lat: 12.925, lon: 77.583, place: "Jayanagar, Bengaluru", hours: 5 }
+    # more options: { file: logs/kshan/weather.md, timezone: Asia/Kolkata, fail_hours: 6 }
+
+  # Event drafts typed on the phone (`e dentist fri 5pm`) → data/event.md
+  kshan_events:
+    schedule: "15,45 * * * *"
+    catch_up: false
+    description: "Kshan: import event drafts into event.md."
+    # options: { max_age_days: 30 }
 
   # ── Monitors (internal/watch): external sites, told only when something changes ──
   # State: paths.watch/<name>.yml (rewritten only on change). Common options:
-  #   notify: [telegram, rahi]   where changes go (Telegram via Omnimo; Rahi inbox)
+  #   notify: [telegram, kshan]  where changes go (Telegram via Omnimo; the phone's inbox)
   #   fail_after: 3              failed checks in a row before one alert
   #   timeout_s: 30              per request
   # Test without storing or sending: kronos run watch_<name> --dry-run
 
   # New items / points changes in the public Microsoft Rewards (India) catalog
   watch_rewards:
-    schedule: "50 * * * *"
+    schedule: "40 * * * *"
     skip_if_busy: true
     catch_up: false
     timeout: 300
@@ -161,7 +189,7 @@ jobs:
     timeout: 120
     description: "Watch: gold rate."
     options: { city: bangalore, karat: 22 }
-    # more options: { url: 'https://cleartax.in/gold-rate-{city}', pattern: '₹\s*([\d,]+(?:\.\d+)?)\s*per gram for {karat}\s*K gold', notify: [telegram, rahi] }
+    # more options: { url: 'https://cleartax.in/gold-rate-{city}', pattern: '₹\s*([\d,]+(?:\.\d+)?)\s*per gram for {karat}\s*K gold', notify: [telegram, kshan] }
 
   # Cheapest registrar per TLD (transfer + 1st renewal)
   watch_domains:
@@ -170,7 +198,7 @@ jobs:
     timeout: 300
     description: "Watch: domain prices."
     options: { tlds: [ar], rank_by: total, top: 1 }
-    # more options: { sources: [domainoffer, tld-list], max_pages: 5, notify: [telegram, rahi] }
+    # more options: { sources: [domainoffer, tld-list], max_pages: 5, notify: [telegram, kshan] }
 
   # ── Example script job (no rebuild needed; see scripts/disk_check.sh.example) ──
   # disk_check:

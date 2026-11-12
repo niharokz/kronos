@@ -32,8 +32,8 @@ type Logs struct {
 }
 
 // LoadLogs reads every daily log from `from` to `to` (inclusive); unreadable ones are reported, not fatal.
-func LoadLogs(rahiDir string, from, to time.Time) (Logs, error) {
-	ds, err := LogDates(rahiDir)
+func LoadLogs(dirs Dirs, from, to time.Time) (Logs, error) {
+	ds, err := LogDates(dirs.Daily, dirs.DailyOld)
 	if err != nil {
 		return Logs{}, err
 	}
@@ -42,7 +42,7 @@ func LoadLogs(rahiDir string, from, to time.Time) (Logs, error) {
 		if t.Before(from) || t.After(to) {
 			continue
 		}
-		d, ok, err := LoadDay(DayFile(rahiDir, t))
+		d, ok, err := LoadDay(dirs.Day(t))
 		if err != nil {
 			l.Problems = append(l.Problems, err.Error())
 			continue

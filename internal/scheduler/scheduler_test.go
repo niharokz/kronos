@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -202,5 +203,17 @@ func TestSkipIfBusy(t *testing.T) {
 	s.enqueueDue(now.Add(time.Hour))
 	if len(s.queue) != 1 {
 		t.Fatal("idle: not queued")
+	}
+}
+
+// run_at_start: a cron job also runs once when the scheduler starts.
+func TestRunAtStart(t *testing.T) {
+	cfg, _ := testConfig(t, "  test_ok: {schedule: '0 3 1 1 *', run_at_start: true}\n")
+	var out bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	New(cfg, &out).Run(ctx)
+	if !strings.Contains(out.String(), "fine") {
+		t.Errorf("did not run at start:\n%s", out.String())
 	}
 }

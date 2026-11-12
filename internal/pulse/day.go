@@ -14,7 +14,8 @@ import (
 	"gitlab.com/niharokz/kronos/internal/dates"
 )
 
-// Day is one Rahi daily log (<rahi>/daily/YYYYMMDD.md). nil numbers mean missing, never 0.
+// Day is one phone daily log (<daily_logs>/YYYYMMDD.md, Kshan; RahiOS schema).
+// nil numbers mean missing, never 0; mindful/modes/created may be absent (Kshan) = missing.
 type Day struct {
 	Date       time.Time
 	Final      bool
@@ -36,8 +37,8 @@ type App struct {
 }
 
 // DayFile is the log path for a date.
-func DayFile(rahiDir string, d time.Time) string {
-	return filepath.Join(rahiDir, "daily", d.Format("20060102")+".md")
+func DayFile(dailyDir string, d time.Time) string {
+	return filepath.Join(dailyDir, d.Format("20060102")+".md")
 }
 
 // LoadDay reads one daily log; a missing file is (Day{}, false, nil).
@@ -51,7 +52,7 @@ func LoadDay(path string) (Day, bool, error) {
 	}
 	d, err := ParseDay(raw)
 	if err != nil {
-		return Day{}, false, fmt.Errorf("%s: cannot parse (Rahi may be mid-write; retried next run): %v", filepath.Base(path), err)
+		return Day{}, false, fmt.Errorf("%s: cannot parse (the phone may be mid-write; retried next run): %v", filepath.Base(path), err)
 	}
 	if d.Date.IsZero() { // fall back to the file name
 		if t, ok := dates.ParseISO(strings.TrimSuffix(filepath.Base(path), ".md")); ok {
@@ -139,23 +140,30 @@ func (d Day) AppName(pkg string) string {
 	return pkg
 }
 
-// LogDates lists the dates that have a daily log, oldest first.
-func LogDates(rahiDir string) ([]time.Time, error) {
-	entries, err := os.ReadDir(filepath.Join(rahiDir, "daily"))
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
+// LogDates lists the dates that have a daily log in any of the folders, oldest first.
+func LogDates(dailyDirs ...string) ([]time.Time, error) {
+	seen := map[string]bool{}
 	var out []time.Time
-	for _, e := range entries {
-		name := strings.TrimSuffix(e.Name(), ".md")
-		if e.IsDir() || len(name) != 8 || !strings.HasSuffix(e.Name(), ".md") {
+	for _, dir := range dailyDirs {
+		if dir == "" {
 			continue
 		}
-		if t, ok := dates.ParseISO(name); ok {
-			out = append(out, t)
+		entries, err := os.ReadDir(dir)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			name := strings.TrimSuffix(e.Name(), ".md")
+			if e.IsDir() || len(name) != 8 || !strings.HasSuffix(e.Name(), ".md") || seen[name] {
+				continue
+			}
+			if t, ok := dates.ParseISO(name); ok {
+				seen[name] = true
+				out = append(out, t)
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Before(out[j]) })

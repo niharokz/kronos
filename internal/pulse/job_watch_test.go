@@ -21,7 +21,7 @@ func TestPulseWatchAppNudge(t *testing.T) {
 	if err := pulseWatch(c); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(InboxFile(dir, "nudge-instagram-20261021"))
+	raw, err := os.ReadFile(InboxFile(filepath.Join(dir, "inbox"), "nudge-instagram-20261021"))
 	if err != nil {
 		t.Fatal("no app nudge in the inbox\n" + out.String())
 	}
@@ -33,12 +33,12 @@ func TestPulseWatchAppNudge(t *testing.T) {
 	if len(in.Snapshots) != 1 || *in.Snapshots[0].Steps != 9000 || in.Snapshots[0].Apps["com.instagram.android"] != 95 {
 		t.Errorf("snapshot %+v", in)
 	}
-	_ = os.Remove(InboxFile(dir, "nudge-instagram-20261021")) // Rahi moved it to read/
+	_ = os.Remove(InboxFile(filepath.Join(dir, "inbox"), "nudge-instagram-20261021")) // Rahi moved it to read/
 	c.Now = c.Now.Add(30 * time.Minute)
 	if err := pulseWatch(c); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(InboxFile(dir, "nudge-instagram-20261021")); err == nil {
+	if _, err := os.Stat(InboxFile(filepath.Join(dir, "inbox"), "nudge-instagram-20261021")); err == nil {
 		t.Error("same app nudged twice in a day")
 	}
 }
@@ -56,7 +56,7 @@ func TestPulseWatchStepNudge(t *testing.T) {
 	if err := pulseWatch(c); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(InboxFile(dir, "steps-final-20261021"))
+	raw, err := os.ReadFile(InboxFile(filepath.Join(dir, "inbox"), "steps-final-20261021"))
 	if err != nil || !strings.Contains(string(raw), "Last call: 6,000 steps to go") {
 		t.Fatalf("final step nudge: %s %v", raw, err)
 	}
@@ -97,7 +97,7 @@ func TestPulseWatchToleratesBadLog(t *testing.T) {
 	c, root, _ := testCtx(t, "2026-10-21", false)
 	c.Now = c.Today.Add(9 * time.Hour)
 	dir := pulseFixture(t, c, root, 8, 0)
-	put(t, DayFile(dir, c.Today), "date: '2026-10-21'\nscreen: { total_min: [unclosed\n")
+	put(t, DayFile(filepath.Join(dir, "daily"), c.Today), "date: '2026-10-21'\nscreen: { total_min: [unclosed\n")
 	if err := pulseWatch(c); err != nil {
 		t.Fatalf("should warn, not fail: %v", err)
 	}

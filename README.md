@@ -17,6 +17,7 @@ A small, modular **job scheduler** for a self-hosted homelab — one static Go b
 - [Data files](#data-files)
 - [Pulse — digital + health coach](#pulse--digital--health-coach)
   - [Testing Pulse](#testing-pulse)
+- [Kshan — the phone's widgets](#kshan--the-phones-widgets)
 - [Monitors — watch_*](#monitors--watch_)
 - [Setup](#setup)
 - [Configuration](#configuration)
@@ -47,6 +48,7 @@ Any job can also have `watch: [files]`: it then runs again ~10–20 s after one 
 - A job's next run is computed from when it **finished**, so a long run skips a slot instead of piling up.
 - **Catch-up:** if the host was off when a job was due, Kronos runs the missed slot once when it starts (within `catch_up_hours`, default 48), in slot order. Opt out per job with `catch_up: false`.
 - **Skip if busy:** a cron job with `skip_if_busy: true` skips its slot (instead of waiting) when another job is running or queued. Its next run is the next slot.
+- **Run at start:** a cron job with `run_at_start: true` also runs once each time Kronos starts (e.g. `kshan_weather`, so the phone has fresh weather after a restart).
 - Every run has a **timeout** (default 15 min). Go jobs are abandoned, command jobs are killed.
 - A failing run (error, panic, timeout, non-zero exit) is logged as `FAIL` and sent as a Telegram **alert**.
 - On stop, the running job finishes first (compose gives it `stop_grace_period`), then daemons are stopped.
@@ -69,13 +71,15 @@ Any job can also have `watch: [files]`: it then runs again ~10–20 s after one 
 | `daily_update` | daily 03:35 | Writes the agenda: **Overdue**, **Due Today**, **Upcoming (7 days)** — events, subscriptions and `calendar.md` (lines start with the category, e.g. `BIRTHDAY- Asha`, `FESTIVAL- Karva Chauth`). |
 | `archive_rollover` | 1 Jan 03:45 | Moves loose archive files into a folder named after the previous year. |
 | `nimo_briefing` | daily 05:40 | Sends the agenda as a *briefing* — the bot posts it and adds an AI commentary. With Pulse set up, its brief (yesterday's verdict, today's targets) is appended. |
-| `pulse_watch` | every 30 min, 08:00–22:30 | Pulse: snapshots today's Rahi log; nudges an app past its usual while on a strike pattern, and steps when you're unlikely to finish. |
-| `pulse_rollup` | hourly at :10 | Pulse: for each Rahi day that turned final — baselines, self-tightening goals, pattern warnings, weekly/monthly rollups and reports; refreshes the briefing part. |
-| `watch_rewards` | hourly at :50, skipped when busy | Monitor: new items and points changes in the public Microsoft Rewards (India) catalog. |
+| `pulse_watch` | every 30 min, 08:00–22:30 | Pulse: snapshots today's phone log; nudges an app past its usual while on a strike pattern, and steps when you're unlikely to finish. |
+| `pulse_rollup` | hourly at :10 | Pulse: for each phone day that turned final — baselines, self-tightening goals, pattern warnings, weekly/monthly rollups and reports; refreshes the briefing part. |
+| `kshan_weather` | every 30 min at :20/:50, and at start | Kshan: today's weather from open-meteo into `logs/kshan/weather.md` for the phone's Clock widget. |
+| `kshan_events` | every 30 min at :15/:45 | Kshan: event drafts typed on the phone (`e dentist fri 5pm`) become events in `event.md`. |
+| `watch_rewards` | hourly at :40, skipped when busy | Monitor: new items and points changes in the public Microsoft Rewards (India) catalog. |
 | `watch_gold` | daily 11:15 | Monitor: gold rate per gram (default 22K, Bangalore). |
 | `watch_domains` | daily 11:35 | Monitor: cheapest registrar per TLD (default `.ar`, transfer + 1st renewal). |
 
-The defaults are spread so that nothing waits: hourly lanes at :00/:30 (`pulse_watch`), :10 (`pulse_rollup`) and :50 (`watch_rewards`), and the nightly jobs 10 minutes apart in dependency order (subscriptions before Arthik drafts and events, everything before the agenda, the agenda and Pulse before the briefing).
+The defaults are spread so that nothing waits: lanes at :00/:30 (`pulse_watch`), :10 (`pulse_rollup`), :15/:45 (`kshan_events`), :20/:50 (`kshan_weather`) and :40 (`watch_rewards`), and the nightly jobs 10 minutes apart in dependency order (subscriptions before Arthik drafts and events, everything before the agenda, the agenda and Pulse before the briefing).
 
 `kronos jobs` lists the built-in jobs; options per job are documented at the top of its file (`internal/jobs/`, `internal/pulse/job_*.go`, `internal/watch/`).
 
@@ -201,9 +205,9 @@ The Daily activity section charts the latest 30 entries; a chart with no values 
 
 ## Pulse — digital + health coach
 
-Pulse reads the daily logs written by the **Rahi** launcher (`<rahi>/daily/YYYYMMDD.md`, never modified by Kronos) and coaches with deterministic rules — no AI decides anything.
+Pulse reads the daily logs written by the phone — **Kshan** (`paths.daily_logs`, default `logs/kshan/daily/YYYYMMDD.md`; RahiOS's old `logs/rahi/daily/` is still read for days Kshan doesn't have) — never modifies them, and coaches with deterministic rules — no AI decides anything. Fields a log doesn't have (Kshan has no `mindful`, `modes`, `created`) count as missing, never zero.
 
-| File (under `paths.rahi`) | Written by | What |
+| File (under `paths.pulse`, default `logs/pulse/`) | Written by | What |
 |---|---|---|
 | `goals.md` | you (Kronos creates a commented default once) | hard limits, `tracked_apps`, quiet hours, daily message cap, step-nudge times |
 | `baseline.md` | `pulse_rollup` | 7/28-day medians (weekday and weekend apart), goals with their history, what is rolled up |
@@ -211,25 +215,25 @@ Pulse reads the daily logs written by the **Rahi** launcher (`<rahi>/daily/YYYYM
 | `state/sent.yml` | both | every message: dedup, daily cap, feedback (90 days) |
 | `state/brief.yml` | `pulse_rollup` | the Pulse part of today's morning briefing |
 | `weekly/YYYY-Www.md`, `monthly/YYYYMM.md` | `pulse_rollup` | averages, medians, best/worst day, goal days, per-app totals, strikes, goal changes, unlocks |
-| `inbox/<id>.md` | both | nudges and the short weekly report on Rahi's home screen |
+| `<paths.phone_inbox>/<id>.md` | both | nudges and the short weekly report in the phone's Inbox widget (default `logs/kshan/inbox/`) |
 
 **Rules**
 - **Missing ≠ 0:** null values and `health_error` days are left out. Pulse only observes until 7 days are logged.
 - **Goals:** screen time, each tracked app, steps, sleep. Each starts at your 28-day median. A week whose median meets the goal tightens it 5%; two missed weeks in a row loosen it 5% (never past the start). Goals always stay within `limits`.
 - **Today's target:** after a day worse than your baseline, yesterday ∓10% — never stricter than the goal.
 - **Strikes:** a day is *over* at >125% of baseline (<75% for steps and sleep). One over day is mentioned in the briefing; 2 of the last 3 or 3 of the last 7 is a Telegram warning (once per metric per 3 days).
-- **Nudges** (Rahi inbox):
+- **Nudges** (phone inbox):
   - an app past its 7-day median while on a strike pattern — once per app per day;
   - steps when you're unlikely to finish — at most a soft and a final nudge, silent once reached. The forecast spreads your usual total over waking hours until 14 goal days of snapshots exist, then uses what you typically walk after that time of day.
 - **Budget:** `max_messages_per_day` (reports excluded) and no messages in quiet hours. A pattern warning is never dropped; it moves to the next briefing.
 - **Feedback:** if the last 3 nudges of a kind were dismissed (✓ without opening) or the day still ended off target, that kind backs off to every other day for a week. A mindful turn-back counts as improvement.
 - **Reports:** weekly (when Sunday is final) to Telegram plus a short version in the inbox; monthly to Telegram. They are plain numbers until Omnimo can write prose from the rollup (planned Omnimo `report` kind: see ARCHITECTURE.md §6.8).
 
-Message ids are deterministic (`nudge-instagram-20261024`, `steps-final-20261024`, `pattern-screen-time-20261023`, `report-weekly-2026-W43`), so reruns never duplicate. A log Rahi is still writing is skipped with a warning and read again on the next run.
+Message ids are deterministic (`nudge-instagram-20261024`, `steps-final-20261024`, `pattern-screen-time-20261023`, `report-weekly-2026-W43`), so reruns never duplicate. A log the phone is still writing is skipped with a warning and read again on the next run.
 
 ### Testing Pulse
 
-Build a sandbox of fake Rahi logs, then run the Pulse jobs against it at any time of day. Your vault, Telegram, `paths.logs` and Kronos state are never touched. Inside the container use `docker exec kronos kronos …` and a folder under `/tmp` (a 16 MB scratch space, cleared on restart).
+Build a sandbox of fake phone logs, then run the Pulse jobs against it at any time of day. Your vault, Telegram, `paths.logs` and Kronos state are never touched. Inside the container use `docker exec kronos kronos …` and a folder under `/tmp` (a 16 MB scratch space, cleared on restart).
 
 **1. Fake logs** — 35 final days before `--today`, plus intraday step snapshots (every 30 min, 08:00–22:30) for each day with health data, and a `goals.md` tracking Instagram and YouTube:
 
@@ -259,17 +263,17 @@ Day numbers count back from `--today` (1 = yesterday). `--force` only wipes a fo
 
 ```sh
 # morning rollup: baselines, goals, weekly/monthly, pattern warnings, brief
-kronos run pulse_rollup --rahi-path /tmp/pulse --now '2026-11-30 09:05' --dry-run
+kronos run pulse_rollup --sandbox /tmp/pulse --now '2026-11-30 09:05' --dry-run
 
 # nudges through the day: soft steps after 16:00, final after 20:30, quiet from 22:30
-kronos run pulse_watch --rahi-path /tmp/pulse --now '2026-11-30 16:30' --dry-run
-kronos run pulse_watch --rahi-path /tmp/pulse --now '2026-11-30 20:45' --dry-run
-kronos run pulse_watch --rahi-path /tmp/pulse --now '2026-11-30 23:00' --dry-run
+kronos run pulse_watch --sandbox /tmp/pulse --now '2026-11-30 16:30' --dry-run
+kronos run pulse_watch --sandbox /tmp/pulse --now '2026-11-30 20:45' --dry-run
+kronos run pulse_watch --sandbox /tmp/pulse --now '2026-11-30 23:00' --dry-run
 ```
 
 | Flag | Effect |
 |---|---|
-| `--rahi-path DIR` | read and write the sandbox instead of `paths.rahi` (pulse_* jobs only). Telegram messages go to `DIR/_outbox/`, logs to the screen only |
+| `--sandbox DIR` | read and write the sandbox (`DIR/daily/`, `DIR/inbox/`, Pulse's files in `DIR`) instead of the real paths (pulse_* jobs only; old name `--rahi-path`). Telegram messages go to `DIR/_outbox/`, logs to the screen only |
 | `--now 'YYYY-MM-DD HH:MM'` | pretend it is that local time — for quiet hours, step-nudge times and `briefing_at`. On real data it needs `--dry-run` |
 | `--dry-run` | print each message instead of sending it: `~ would send [p1] inbox steps-final-20261130 — title`, then the text. `[p0]`…`[p3]` is the priority (pattern, steps-final, app, steps-soft); `[report]` is outside the daily cap |
 
@@ -281,6 +285,23 @@ Check the results:
 cat /tmp/pulse/baseline.md /tmp/pulse/state/brief.yml
 ls /tmp/pulse/weekly /tmp/pulse/monthly /tmp/pulse/inbox
 ```
+
+---
+
+## Kshan — the phone's widgets
+
+Kshan is the phone's widget app (it replaced the RahiOS launcher). It never goes online itself; Kronos fills its folder (`logs/kshan/`):
+
+| Job | Reads | Writes |
+|---|---|---|
+| `kshan_weather` | open-meteo (no key) | `logs/kshan/weather.md`: now (temp, feels like, words, day/night, humidity), today's min/max/rain chance, the next 5 hours |
+| `kshan_events` | `logs/kshan/events.md` — drafts from the `e` command (and RahiOS's old `logs/rahi/events.md`) | new events in `data/event.md` |
+
+- **Weather options:** `lat`, `lon`, `place` (default Jayanagar, Bengaluru), `hours` (5), `file` (relative = in the vault), `timezone` (Asia/Kolkata), `fail_hours` (6). If open-meteo is down the old file stays; only after 6 hours of failures one alert is sent.
+- **Event drafts:** `e dentist fri 5pm` → *Dentist 17:00* on the coming Friday. Understood: `today`, `tomorrow`, weekdays (`fri`, `next fri`), `14 nov`, `nov 14 2027`, `15/12`, `2026-12-20`, `5pm`, `9:30am`, `17:00`, `noon`. No date → the day you typed it. Each draft is imported once (id `kshan-<when it was typed>`); drafts older than `max_age_days` (30) are ignored. Kronos never edits the drafts file.
+- **Paths** (all in `kronos.yml`): `daily_logs`, `phone_inbox`, `kshan_events`, each with an `_old` RahiOS fallback that is only read (set it to `""` to drop it); Pulse's own files in `pulse`.
+
+Try: `docker exec kronos kronos run kshan_weather --dry-run` · `docker exec kronos kronos run kshan_events --dry-run`.
 
 ---
 
@@ -297,7 +318,7 @@ Monitors check something outside the homelab and tell you **only when it changes
 **How every monitor behaves**
 - **First run** stores the current values as a baseline and sends one "now watching" message.
 - **Same values → nothing.** The state file is not rewritten and nothing is sent. A change in details that don't matter (a Rewards item's text) is stored silently.
-- **A change** is stored and sent to each channel in `notify:` — `telegram` (via Omnimo) and/or `rahi` (a message in `<paths.rahi>/inbox/`, id `watch-<name>-YYYYMMDDHHMM`).
+- **A change** is stored and sent to each channel in `notify:` — `telegram` (via Omnimo) and/or `kshan` (a message in the phone's inbox, `paths.phone_inbox`, id `watch-<name>-YYYYMMDDHHMM`; the old name `rahi` still works).
 - **Failures:** a failed check is a warning; `fail_after` failures in a row (default 3) give one FAIL + alert; the next success logs "working again". A Rewards page that fails keeps its old items; an empty or blocked page never replaces good values.
 - **Dry run:** `kronos run watch_<name> --dry-run` fetches and prints the current values and what it would send. Nothing is stored or sent, failures aren't counted.
 
@@ -305,7 +326,7 @@ Monitors check something outside the homelab and tell you **only when it changes
 
 | Monitor | Option | Default | |
 |---|---|---|---|
-| all | `notify` | rewards `[telegram]`, others `[telegram, rahi]` | where changes go |
+| all | `notify` | rewards `[telegram]`, others `[telegram, kshan]` | where changes go |
 | all | `fail_after` | `3` | failed checks in a row before one alert |
 | all | `timeout_s` | `30` | per request (one retry on a network error or 5xx) |
 | rewards | `market` | `in` | `/redeem/<market>/…` |
@@ -398,6 +419,7 @@ jobs:
     timeout: 300              # optional per-job override
     catch_up: true            # optional (default true)
     skip_if_busy: false       # optional: skip the slot while another job runs
+    run_at_start: false       # optional: also run once when Kronos starts
     enabled: true             # optional (default true)
     watch: [/data/notes/data/event.md]   # optional
     options: { purge_after_days: 365 }  # job-specific settings
@@ -477,8 +499,8 @@ Run inside the container (`docker exec kronos kronos …`):
 
 ```
 kronos run <job> [--dry-run]    run a job now; --dry-run prints the diff and changes nothing
-     [--now 'YYYY-MM-DD HH:MM'] [--rahi-path DIR]   test Pulse (see Testing Pulse)
-kronos pulse-fixture --out DIR  fake Rahi logs for testing Pulse (--help for patterns)
+     [--now 'YYYY-MM-DD HH:MM'] [--sandbox DIR]     test Pulse (see Testing Pulse)
+kronos pulse-fixture --out DIR  fake phone logs for testing Pulse (--help for patterns)
 kronos list                     jobs, schedule, next run, last run, status
 kronos next [n]                 the next n scheduled runs
 kronos health                   PASS/FAIL per job (failed or missed run); exit 1 on FAIL
@@ -529,7 +551,8 @@ kronos/
 │   ├── job/                    Register(), Ctx, logger, dry-run diff  ← the plug-in API
 │   ├── jobs/                   module "vault jobs": <name>.go + <name>_test.go each (+ assets/health.css)
 │   ├── pulse/                  module "Pulse": rules + pulse_watch / pulse_rollup (job_*.go)
-│   │   └── fixture/            fake Rahi logs for testing (kronos pulse-fixture)
+│   │   └── fixture/            fake phone logs for testing (kronos pulse-fixture)
+│   ├── kshan/                  module "Kshan": kshan_weather, kshan_events (+ when.go: dates in draft text)
 │   ├── watch/                  module "monitors": engine (watch.go, client.go) + one file per watch_<name>
 │   ├── store/                  YAML records, atomic writes, Python-compatible formatting
 │   ├── dates/                  date parsing and repeat rules

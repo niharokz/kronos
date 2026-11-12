@@ -185,7 +185,7 @@ func Plan(cands []Message, s *Sent, today time.Time, max int, quiet bool) (send,
 
 // ── Inbox files ─────────────────────────────────────────────────────────
 
-// InboxHeader is the frontmatter Rahi reads (title/from/date); id/type are for Kronos.
+// InboxHeader is the frontmatter the phone reads (title/from/date); id/type are for Kronos.
 type InboxHeader struct {
 	ID    string `yaml:"id"`
 	Title string `yaml:"title"`
@@ -194,8 +194,8 @@ type InboxHeader struct {
 	Type  string `yaml:"type"`
 }
 
-// InboxFile is <rahi>/inbox/<id>.md.
-func InboxFile(rahiDir, id string) string { return filepath.Join(rahiDir, "inbox", id+".md") }
+// InboxFile is <phone_inbox>/<id>.md.
+func InboxFile(inboxDir, id string) string { return filepath.Join(inboxDir, id+".md") }
 
 // InboxMarkdown renders one inbox message: YAML frontmatter + body.
 func InboxMarkdown(m Message, day time.Time) ([]byte, error) {
@@ -213,7 +213,7 @@ func InboxMarkdown(m Message, day time.Time) ([]byte, error) {
 
 // ── Feedback from inbox/read ────────────────────────────────────────────
 
-// ReadItem is a message you've seen: Rahi moved it to inbox/read/.
+// ReadItem is a message you've seen: the phone moved it to inbox/read/.
 type ReadItem struct {
 	ID        string
 	ReadDay   time.Time
@@ -223,10 +223,19 @@ type ReadItem struct {
 var readSuffix = regexp.MustCompile(`_(\d{8})(-\d+)?$`)
 var frontmatter = regexp.MustCompile(`(?s)\A---\s*\n(.*?)\n---\s*(\n|\z)`)
 
-// LoadRead lists messages in inbox/read; Rahi 0.0.5 fields (read_at, dismissed) when present,
+// LoadRead lists messages in inbox/read; RahiOS 0.0.5 fields (read_at, dismissed) when present,
 // else the read day from the file name (<id>_YYYYMMDD.md).
-func LoadRead(rahiDir string) []ReadItem {
-	dir := filepath.Join(rahiDir, "inbox", "read")
+func LoadRead(inboxDirs ...string) []ReadItem {
+	var out []ReadItem
+	for _, inbox := range inboxDirs {
+		if inbox != "" {
+			out = append(out, loadRead(filepath.Join(inbox, "read"))...)
+		}
+	}
+	return out
+}
+
+func loadRead(dir string) []ReadItem {
 	entries, _ := os.ReadDir(dir)
 	var out []ReadItem
 	for _, e := range entries {

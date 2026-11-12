@@ -13,8 +13,19 @@ import (
 )
 
 // Shared by pulse_watch and pulse_rollup.
-// Kronos never writes to <rahi>/daily/ — only goals.md (once), baseline.md,
+// Kronos never writes to the daily logs — only <pulse>/goals.md (once), baseline.md,
 // state/, weekly/, monthly/ and inbox/.
+
+// jobDirs are Pulse's folders from kronos.yml paths (kronos run --sandbox points them at one folder).
+func jobDirs(c *job.Ctx) Dirs {
+	return Dirs{
+		Home:     c.Path("pulse"),                   // kronos.yml: paths.pulse
+		Daily:    c.Path("daily_logs"),              // kronos.yml: paths.daily_logs
+		DailyOld: c.OptionalPath("daily_logs_old"),  // kronos.yml: paths.daily_logs_old
+		Inbox:    c.Path("phone_inbox"),             // kronos.yml: paths.phone_inbox
+		InboxOld: c.OptionalPath("phone_inbox_old"), // kronos.yml: paths.phone_inbox_old
+	}
+}
 
 // pulseGoals reads goals.md, writing the commented default when it is missing.
 func pulseGoals(c *job.Ctx, dir string) (Goals, error) {
@@ -37,7 +48,7 @@ func pulseGoals(c *job.Ctx, dir string) (Goals, error) {
 
 // pulseDeliver sends one message on its channel and records it in sent.
 // In a dry run it prints the message (priority, channel, id) instead.
-func pulseDeliver(c *job.Ctx, dir string, m Message, sent *Sent, forDay string) error {
+func pulseDeliver(c *job.Ctx, m Message, sent *Sent, forDay string) error {
 	if c.DryRun {
 		prio := fmt.Sprintf("p%d", Priority(m.Type))
 		if m.Type == TypeReport {
@@ -54,7 +65,7 @@ func pulseDeliver(c *job.Ctx, dir string, m Message, sent *Sent, forDay string) 
 		if err != nil {
 			return err
 		}
-		path := InboxFile(dir, m.ID)
+		path := InboxFile(jobDirs(c).Inbox, m.ID)
 		if err := c.MkdirAll(filepath.Dir(path)); err != nil {
 			return err
 		}
@@ -80,7 +91,7 @@ func pulseSave(c *job.Ctx, path, header string, v any) error {
 	return pulseWrite(c, path, data)
 }
 
-// pulseWrite writes Pulse's own files. A sandbox dry run (--rahi-path) still writes them,
+// pulseWrite writes Pulse's own files. A sandbox dry run (--sandbox) still writes them,
 // so baselines and rollups build up there; a dry run on the real vault only prints diffs.
 func pulseWrite(c *job.Ctx, path string, data []byte) error {
 	if c.DryRun && c.Sandbox {

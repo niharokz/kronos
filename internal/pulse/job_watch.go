@@ -8,7 +8,7 @@ import (
 	"gitlab.com/niharokz/kronos/internal/job"
 )
 
-// pulse_watch snapshots today's (partial) Rahi log every run and sends nudges:
+// pulse_watch snapshots today's (partial) phone log every run and sends nudges:
 // an app past its 7-day median while on a strike pattern (once per app per day),
 // and steps when you're unlikely to reach today's target (soft, then final; max 2).
 // Observe-only until 7 days of data. Quiet hours and the daily cap come from goals.md.
@@ -16,20 +16,21 @@ import (
 func init() { job.Register("pulse_watch", pulseWatch) }
 
 func pulseWatch(c *job.Ctx) error {
-	dir := c.Path("rahi") // kronos.yml: paths.rahi
+	dirs := jobDirs(c)
+	dir := dirs.Home // goals, baseline, state, rollups
 	g, err := pulseGoals(c, dir)
 	if err != nil { // your file: warn and retry, no hourly alert storm
 		c.Log.Warn("goals.md: %v – fix the YAML; retried next run", err)
 		return nil
 	}
 	today, hhmm := c.Today, c.Now.Format("15:04")
-	day, ok, err := LoadDay(DayFile(dir, today))
+	day, ok, err := LoadDay(dirs.Day(today))
 	if err != nil {
 		c.Log.Warn("%v", err)
 		return nil
 	}
 	if !ok {
-		c.Log.Skip("No Rahi log for today yet")
+		c.Log.Skip("No phone log for today yet")
 		return nil
 	}
 
@@ -66,14 +67,14 @@ func pulseWatch(c *job.Ctx) error {
 		c.Log.Warn("sent.yml: %v – retried next run", err)
 		return nil
 	}
-	logs, err := LoadLogs(dir, today.AddDate(0, 0, -60), today.AddDate(0, 0, -1))
+	logs, err := LoadLogs(dirs, today.AddDate(0, 0, -60), today.AddDate(0, 0, -1))
 	if err != nil {
 		return err
 	}
 	for _, p := range logs.Problems {
 		c.Log.Warn("%s", p)
 	}
-	read := LoadRead(dir)
+	read := LoadRead(dirs.Inbox, dirs.InboxOld)
 	yesterday, haveY := logs.ByDate[dates.Format(today.AddDate(0, 0, -1))]
 
 	var cands []Message
@@ -84,7 +85,7 @@ func pulseWatch(c *job.Ctx) error {
 
 	send, _ := Plan(cands, sent, today, g.MaxMessages, g.Quiet(hhmm))
 	for _, m := range send {
-		if err := pulseDeliver(c, dir, m, sent, ""); err != nil {
+		if err := pulseDeliver(c, m, sent, ""); err != nil {
 			return err
 		}
 	}

@@ -15,7 +15,8 @@
 // overrun skips a slot instead of piling up. On start, a cron job whose last
 // scheduled slot (within settings.catch_up_hours) was missed — the host was
 // off — runs once to catch up, in slot order. A job with skip_if_busy: true
-// skips a slot instead of waiting when another job is running or queued.
+// skips a slot instead of waiting when another job is running or queued; one with
+// run_at_start: true also runs once at start (after the @startup jobs, before catch-ups).
 package scheduler
 
 import (
@@ -159,8 +160,11 @@ func (s *Scheduler) Run(ctx context.Context) {
 	now := time.Now()
 
 	for _, t := range s.tasks {
-		if t.kind == Startup {
+		switch {
+		case t.kind == Startup:
 			s.enqueue(t, "")
+		case t.kind == Cron && t.job.RunAtStart: // kronos.yml: jobs.<name>.run_at_start
+			s.enqueue(t, "start")
 		}
 	}
 	s.catchUp(now)

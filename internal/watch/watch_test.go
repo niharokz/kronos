@@ -15,7 +15,7 @@ import (
 	"gitlab.com/niharokz/kronos/internal/job"
 )
 
-// testCtx: a job context with watch, rahi and outbox in a temp folder.
+// testCtx: a job context with watch, phone inbox and outbox in a temp folder.
 func testCtx(t *testing.T, options string, dry bool) (*job.Ctx, string, *bytes.Buffer) {
 	t.Helper()
 	dir := t.TempDir()
@@ -24,7 +24,7 @@ func testCtx(t *testing.T, options string, dry bool) (*job.Ctx, string, *bytes.B
   state: `+dir+`/state.json
   outbox: `+dir+`/outbox
   watch: `+dir+`/watch
-  rahi: `+dir+`/rahi
+  phone_inbox: `+dir+`/kshan/inbox
 jobs:
   watch_test: {schedule: '@manual', options: {`+options+`}}
 `), "test.yml")
@@ -46,7 +46,7 @@ type fake struct {
 
 func fakeWatcher(v *int, err *error, warns *[]string) Watcher[fake] {
 	return Watcher[fake]{
-		Name: "test", Title: "Test", Notify: []string{Telegram, Rahi},
+		Name: "test", Title: "Test", Notify: []string{Telegram, Phone},
 		Fetch: func(*job.Ctx, *Client) (fake, []string, error) { return fake{*v}, *warns, *err },
 		Show:  func(f fake) string { return "value " + Commas(float64(f.Value)) },
 		Diff: func(_ *job.Ctx, o, n fake) string {
@@ -64,7 +64,7 @@ func count(t *testing.T, pattern string) int {
 	return len(files)
 }
 
-// Baseline, then: same value → no write and no message; a change → stored + Telegram + Rahi inbox.
+// Baseline, then: same value → no write and no message; a change → stored + Telegram + phone inbox.
 func TestRunStoresAndNotifiesOnlyOnChange(t *testing.T) {
 	c, dir, out := testCtx(t, "", false)
 	v, ferr, warns := 100, error(nil), []string(nil)
@@ -74,7 +74,7 @@ func TestRunStoresAndNotifiesOnlyOnChange(t *testing.T) {
 	if err := Run(c, w); err != nil {
 		t.Fatal(err)
 	}
-	if count(t, dir+"/outbox/*.json") != 1 || count(t, dir+"/rahi/inbox/watch-test-start*.md") != 1 {
+	if count(t, dir+"/outbox/*.json") != 1 || count(t, dir+"/kshan/inbox/watch-test-start*.md") != 1 {
 		t.Fatalf("baseline should announce once on both channels\n%s", out)
 	}
 	before, _ := os.Stat(state)
@@ -97,9 +97,9 @@ func TestRunStoresAndNotifiesOnlyOnChange(t *testing.T) {
 	if !strings.Contains(string(raw), "value: 120") || count(t, dir+"/outbox/*.json") != 2 {
 		t.Errorf("change not stored/sent:\n%s", raw)
 	}
-	inbox, _ := os.ReadFile(filepath.Join(dir, "rahi", "inbox", "watch-test-202610261215.md"))
+	inbox, _ := os.ReadFile(filepath.Join(dir, "kshan", "inbox", "watch-test-202610261215.md"))
 	if !strings.HasPrefix(string(inbox), "---\nid: watch-test-202610261215\ntitle: Test\nfrom: Kronos\n") || !strings.Contains(string(inbox), "value 100 → 120") {
-		t.Errorf("rahi inbox:\n%s", inbox)
+		t.Errorf("phone inbox:\n%s", inbox)
 	}
 }
 
@@ -120,11 +120,11 @@ func TestRunDryRunStoresNothing(t *testing.T) {
 
 // options.notify picks the channels.
 func TestRunNotifyOption(t *testing.T) {
-	c, dir, _ := testCtx(t, "notify: [rahi]", false)
+	c, dir, _ := testCtx(t, "notify: [kshan]", false)
 	v, ferr, warns := 1, error(nil), []string(nil)
 	_ = Run(c, fakeWatcher(&v, &ferr, &warns))
-	if count(t, dir+"/outbox/*.json") != 0 || count(t, dir+"/rahi/inbox/*.md") != 1 {
-		t.Error("notify: [rahi] should skip Telegram")
+	if count(t, dir+"/outbox/*.json") != 0 || count(t, dir+"/kshan/inbox/*.md") != 1 {
+		t.Error("notify: [kshan] should skip Telegram")
 	}
 }
 

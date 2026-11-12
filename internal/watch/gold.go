@@ -23,7 +23,7 @@ func init() { Register(goldWatcher) }
 var goldWatcher = Watcher[Gold]{
 	Name:   "gold",
 	Title:  "Gold rate",
-	Notify: []string{Telegram, Rahi},
+	Notify: []string{Telegram, Phone},
 	Fetch:  fetchGold,
 	Show:   func(g Gold) string { return g.line() },
 	Diff:   diffGold,

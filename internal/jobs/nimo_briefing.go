@@ -30,7 +30,7 @@ func nimoBriefing(c *job.Ctx) error {
 		c.Log.Skip("daily.md is empty")
 		return nil
 	}
-	if b, ok := pulse.LoadBrief(pulse.BriefFile(c.Path("rahi")), c.Today); ok { // kronos.yml: paths.rahi (Pulse, if used)
+	if b, ok := pulse.LoadBrief(pulse.BriefFile(c.Path("pulse")), c.Today); ok { // kronos.yml: paths.pulse (Pulse, if used)
 		text = strings.TrimRight(text, "\n") + "\n\n" + b.Text()
 	}
 	if err := c.Notify(outbox.Briefing, "daily", text); err != nil {

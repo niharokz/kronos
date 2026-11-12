@@ -20,9 +20,10 @@ import (
 
 	"gitlab.com/niharokz/kronos/internal/config"
 	"gitlab.com/niharokz/kronos/internal/job"
-	_ "gitlab.com/niharokz/kronos/internal/jobs" // registers the vault jobs
+	_ "gitlab.com/niharokz/kronos/internal/jobs"  // registers the vault jobs
+	_ "gitlab.com/niharokz/kronos/internal/kshan" // registers kshan_*
 	"gitlab.com/niharokz/kronos/internal/outbox"
-	_ "gitlab.com/niharokz/kronos/internal/pulse" // registers pulse_*
+	"gitlab.com/niharokz/kronos/internal/pulse" // registers pulse_*
 	"gitlab.com/niharokz/kronos/internal/scheduler"
 	"gitlab.com/niharokz/kronos/internal/state"
 	_ "gitlab.com/niharokz/kronos/internal/watch" // registers the watch_* monitors
@@ -33,8 +34,8 @@ const usage = `kronos — Nimory's job scheduler
 Usage:
   kronos serve                       run the scheduler (the container's main process)
   kronos run <job> [--dry-run]       run one job now; --dry-run prints what would change
-             [--now 'YYYY-MM-DD HH:MM']   pretend it is this time (needs --dry-run or --rahi-path)
-             [--rahi-path DIR]            Pulse jobs only: use a test folder instead of paths.rahi
+             [--now 'YYYY-MM-DD HH:MM']   pretend it is this time (needs --dry-run or --sandbox)
+             [--sandbox DIR]              Pulse jobs only: use a test folder (old name: --rahi-path)
   kronos pulse-fixture --out DIR [...]   write fake Rahi logs for testing Pulse (--help for options)
   kronos list                        jobs, schedules, next and last runs
   kronos next [n]                    the next n scheduled runs (default 10)
@@ -111,7 +112,8 @@ func runJob(cfg *config.Config, args []string) int {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	dry := fs.Bool("dry-run", false, "print what would change without changing anything")
 	nowFlag := fs.String("now", "", "pretend it is this local time: 'YYYY-MM-DD HH:MM'")
-	rahi := fs.String("rahi-path", "", "Pulse test folder used instead of paths.rahi")
+	sandbox := fs.String("sandbox", "", "Pulse test folder (daily/, inbox/, Pulse files) instead of the real paths")
+	fs.StringVar(sandbox, "rahi-path", "", "old name of --sandbox")
 	name, rest := "", args
 	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
 		name, rest = rest[0], rest[1:]
@@ -121,10 +123,10 @@ func runJob(cfg *config.Config, args []string) int {
 		name = fs.Arg(0)
 	}
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "Usage: kronos run <job> [--dry-run] [--now 'YYYY-MM-DD HH:MM'] [--rahi-path DIR]")
+		fmt.Fprintln(os.Stderr, "Usage: kronos run <job> [--dry-run] [--now 'YYYY-MM-DD HH:MM'] [--sandbox DIR]")
 		return 2
 	}
-	opt, err := testOptions(cfg, name, *dry, *nowFlag, *rahi)
+	opt, err := testOptions(cfg, name, *dry, *nowFlag, *sandbox)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "kronos:", err)
 		return 2
@@ -144,7 +146,7 @@ func runJob(cfg *config.Config, args []string) int {
 	switch {
 	case opt.Sandbox:
 		logDir = ""
-		fmt.Printf("Test run of %s in %s (Telegram → %s)\n", name, *rahi, cfg.Paths["outbox"])
+		fmt.Printf("Test run of %s in %s (Telegram → %s)\n", name, *sandbox, cfg.Paths["outbox"])
 	case *dry:
 		logDir = ""
 		fmt.Printf("Dry run of %s — nothing will be changed.\n", name)
@@ -170,19 +172,20 @@ func runJob(cfg *config.Config, args []string) int {
 	return 0
 }
 
-// testOptions turns the test flags into run options. --rahi-path points paths.rahi at a
-// sandbox and moves the outbox and logs there too, so nothing reaches Telegram or your logs.
-func testOptions(cfg *config.Config, name string, dry bool, now, rahi string) (scheduler.Options, error) {
+// testOptions turns the test flags into run options. --sandbox points Pulse's folders
+// (pulse, daily_logs, phone_inbox) at one test folder and moves the outbox and logs there too,
+// so nothing reaches Telegram, the phone or your logs.
+func testOptions(cfg *config.Config, name string, dry bool, now, sandbox string) (scheduler.Options, error) {
 	o := scheduler.Options{DryRun: dry}
-	if rahi != "" {
+	if sandbox != "" {
 		if !strings.HasPrefix(name, "pulse_") {
-			return o, fmt.Errorf("--rahi-path is for the pulse_* jobs (other jobs would still touch real paths)")
+			return o, fmt.Errorf("--sandbox is for the pulse_* jobs (other jobs would still touch real paths)")
 		}
-		abs, err := filepath.Abs(rahi)
+		abs, err := filepath.Abs(sandbox)
 		if err != nil {
 			return o, err
 		}
-		cfg.Paths["rahi"] = abs
+		pulse.SandboxPaths(cfg.Paths, abs)
 		cfg.Paths["outbox"] = filepath.Join(abs, "_outbox")
 		cfg.Paths["logs"] = ""
 		o.Sandbox = true
@@ -193,7 +196,7 @@ func testOptions(cfg *config.Config, name string, dry bool, now, rahi string) (s
 			return o, fmt.Errorf("--now %q: want 'YYYY-MM-DD HH:MM'", now)
 		}
 		if !dry && !o.Sandbox {
-			return o, fmt.Errorf("--now on real data needs --dry-run (or use --rahi-path)")
+			return o, fmt.Errorf("--now on real data needs --dry-run (or use --sandbox)")
 		}
 		o.Now = t
 	}

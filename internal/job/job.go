@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -97,7 +98,7 @@ type Ctx struct {
 	Job    config.Job // this job's entry in kronos.yml
 	Out    io.Writer  // where dry-run diffs and notices are printed
 
-	Sandbox bool // kronos run --rahi-path: test folder; jobs may keep test state even in a dry run
+	Sandbox bool // kronos run --sandbox: test folder; jobs may keep test state even in a dry run
 }
 
 // NewCtx builds the context for one run.
@@ -131,6 +132,18 @@ func (c *Ctx) Path(key string) string {
 		panic(fmt.Sprintf("unknown path %q — add it under paths: in %s", key, c.Cfg.File))
 	}
 	return p
+}
+
+// OptionalPath is a configured path, or "" when unset or set to "" (read-only fallbacks).
+func (c *Ctx) OptionalPath(key string) string { return c.Cfg.Paths[key] }
+
+// VaultFile resolves a job option holding a file path: relative → under paths.vault.
+func (c *Ctx) VaultFile(option, def string) string {
+	p := c.String(option, def)
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(c.Path("vault"), p) // kronos.yml: paths.vault
 }
 
 // Int, String, Bool and Strings read this job's options: block.

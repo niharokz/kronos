@@ -13,7 +13,7 @@ import (
 	"gitlab.com/niharokz/kronos/internal/job"
 )
 
-// pulse_rollup processes every Rahi day that has turned final and isn't rolled up yet:
+// pulse_rollup processes every phone day that has turned final and isn't rolled up yet:
 // baselines (7/28-day medians, weekday/weekend), goals (start, weekly tighten/loosen),
 // pattern warnings, weekly (when Sunday is final) and monthly (when the last day is final)
 // rollups and reports. Every run also refreshes state/brief.yml for the morning briefing.
@@ -24,7 +24,8 @@ import (
 func init() { job.Register("pulse_rollup", pulseRollup) }
 
 func pulseRollup(c *job.Ctx) error {
-	dir := c.Path("rahi") // kronos.yml: paths.rahi
+	dirs := jobDirs(c)
+	dir := dirs.Home // goals, baseline, state, rollups
 	g, err := pulseGoals(c, dir)
 	if err != nil { // your file: warn and retry, no hourly alert storm
 		c.Log.Warn("goals.md: %v – fix the YAML; retried next run", err)
@@ -41,7 +42,7 @@ func pulseRollup(c *job.Ctx) error {
 		c.Log.Warn("sent.yml: %v – retried next run", err)
 		return nil
 	}
-	logs, err := LoadLogs(dir, today.AddDate(0, 0, -70), today)
+	logs, err := LoadLogs(dirs, today.AddDate(0, 0, -70), today)
 	if err != nil {
 		return err
 	}
@@ -96,7 +97,7 @@ func pulseRollup(c *job.Ctx) error {
 		nextBrief = dates.Format(today.AddDate(0, 0, 1))
 	}
 	for _, m := range send {
-		if err := pulseDeliver(c, dir, m, sent, ""); err != nil {
+		if err := pulseDeliver(c, m, sent, ""); err != nil {
 			return err
 		}
 	}
@@ -245,13 +246,13 @@ func sendReports(c *job.Ctx, dir string, g Goals, st *State, sent *Sent, names m
 		}
 		tg := Message{ID: id, Type: TypeReport, Metric: "weekly", Channel: ChanTelegram,
 			Title: "Pulse weekly " + week, Text: ReportText(r, g, names)}
-		if err := pulseDeliver(c, dir, tg, sent, ""); err != nil {
+		if err := pulseDeliver(c, tg, sent, ""); err != nil {
 			return n, err
 		}
 		if short := ReportShort(r, g, names); short != "" {
 			in := Message{ID: "week-" + strings.ToLower(week), Type: TypeReport, Metric: "weekly", Channel: ChanInbox,
 				Title: "Your week " + week, Text: short}
-			if err := pulseDeliver(c, dir, in, sent, ""); err != nil {
+			if err := pulseDeliver(c, in, sent, ""); err != nil {
 				return n, err
 			}
 		}
@@ -266,7 +267,7 @@ func sendReports(c *job.Ctx, dir string, g Goals, st *State, sent *Sent, names m
 		}
 		m := Message{ID: id, Type: TypeReport, Metric: "monthly", Channel: ChanTelegram,
 			Title: "Pulse monthly " + month, Text: ReportText(r, g, names)}
-		if err := pulseDeliver(c, dir, m, sent, ""); err != nil {
+		if err := pulseDeliver(c, m, sent, ""); err != nil {
 			return n, err
 		}
 		n++

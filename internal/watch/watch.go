@@ -6,7 +6,7 @@
 // (what changed worth telling); Run does the rest:
 //
 //   - the latest values are kept in <paths.watch>/<name>.yml, rewritten only when they change;
-//   - a change worth telling goes to Telegram (via Omnimo) and/or the Rahi inbox (options.notify);
+//   - a change worth telling goes to Telegram (via Omnimo) and/or the phone inbox, Kshan (options.notify);
 //   - the first run only records a baseline and says what it is now watching;
 //   - a failed fetch is a warning; options.fail_after failures in a row (default 3) alert once;
 //   - a dry run (kronos run watch_<name> --dry-run) fetches and prints, and stores nothing.
@@ -34,7 +34,7 @@ import (
 // Notification channels (options.notify).
 const (
 	Telegram = "telegram" // Omnimo notice
-	Rahi     = "rahi"     // <paths.rahi>/inbox/<id>.md
+	Phone    = "kshan"    // <paths.phone_inbox>/<id>.md (Kshan Inbox widget); "rahi" still accepted
 )
 
 // Watcher is one monitor's logic; T is what it stores (YAML-marshalled).
@@ -142,20 +142,20 @@ func send[T any](c *job.Ctx, w Watcher[T], idSuffix, note, text string) error {
 			if err := c.Notify(outbox.Notice, title, clip(title+"\n\n"+text, 3800)); err != nil {
 				return err
 			}
-		case Rahi:
-			if err := rahiInbox(c, "watch-"+w.Name+"-"+idSuffix, title, text); err != nil {
+		case Phone, "rahi":
+			if err := phoneInbox(c, "watch-"+w.Name+"-"+idSuffix, title, text); err != nil {
 				return err
 			}
 		default:
-			c.Log.Warn("Unknown notify channel %q (use telegram, rahi)", ch)
+			c.Log.Warn("Unknown notify channel %q (use telegram, kshan)", ch)
 		}
 	}
 	return nil
 }
 
-// rahiInbox drops one message into Rahi's inbox (frontmatter title/from/date, like Pulse).
-func rahiInbox(c *job.Ctx, id, title, text string) error {
-	dir := filepath.Join(c.Path("rahi"), "inbox") // kronos.yml: paths.rahi
+// phoneInbox drops one message into the phone's inbox (frontmatter title/from/date, like Pulse).
+func phoneInbox(c *job.Ctx, id, title, text string) error {
+	dir := c.Path("phone_inbox") // kronos.yml: paths.phone_inbox
 	head, err := yaml.Marshal(struct {
 		ID    string `yaml:"id"`
 		Title string `yaml:"title"`

@@ -41,6 +41,7 @@ type Job struct {
 	Timeout     int            `yaml:"timeout"`      // seconds; 0 = settings.timeout_seconds
 	CatchUp     *bool          `yaml:"catch_up"`     // default true (cron jobs only)
 	SkipIfBusy  bool           `yaml:"skip_if_busy"` // cron: skip a slot while another job runs or waits
+	RunAtStart  bool           `yaml:"run_at_start"` // cron: also run once when Kronos starts
 	Watch       []string       `yaml:"watch"`        // also run when any of these files change
 	Command     []string       `yaml:"command"`      // run a program instead of a built-in Go job
 	Options     map[string]any `yaml:"options"`      // job-specific settings, read with Ctx.Int/String/...
@@ -55,22 +56,29 @@ func (j Job) CatchesUp() bool { return j.CatchUp == nil || *j.CatchUp }
 // defaultPaths are used for any key missing from paths: in kronos.yml (container
 // paths; the host folders behind them come from .env via docker-compose.yml).
 var defaultPaths = map[string]string{
-	"logs":          "/data/notes/logs/kronos",
-	"state":         "/data/notes/logs/kronos/state.json",
-	"outbox":        "/data/notes/data/outbox",
-	"events":        "/data/notes/data/event.md",
-	"event_backup":  "/data/notes/data/event.md.bck",
-	"subscriptions": "/data/notes/data/subscription.md",
-	"calendar":      "/data/notes/data/calendar.md",
-	"health":        "/data/notes/data/health.md",
-	"inbox":         "/data/notes/inbox",
-	"archive":       "/data/notes/archive",
-	"daily":         "/data/notes/inbox/daily.md",
-	"finance_inbox": "/data/notes/data/finance/inbox",
-	"rahi":          "/data/notes/logs/rahi",
-	"watch":         "/data/notes/logs/watch",
-	"health_site":   "/data/health-site",
-	"google_token":  "/app/config/token.json",
+	"logs":             "/data/notes/logs/kronos",
+	"state":            "/data/notes/logs/kronos/state.json",
+	"outbox":           "/data/notes/data/outbox",
+	"events":           "/data/notes/data/event.md",
+	"event_backup":     "/data/notes/data/event.md.bck",
+	"subscriptions":    "/data/notes/data/subscription.md",
+	"calendar":         "/data/notes/data/calendar.md",
+	"health":           "/data/notes/data/health.md",
+	"inbox":            "/data/notes/inbox",
+	"archive":          "/data/notes/archive",
+	"daily":            "/data/notes/inbox/daily.md",
+	"finance_inbox":    "/data/notes/data/finance/inbox",
+	"vault":            "/data/notes",                      // notes vault root (relative job options resolve here)
+	"pulse":            "/data/notes/logs/pulse",           // Pulse's own files: goals, baseline, state, rollups
+	"daily_logs":       "/data/notes/logs/kshan/daily",     // phone daily logs (Kshan writes)
+	"daily_logs_old":   "/data/notes/logs/rahi/daily",      // read-only fallback (RahiOS); "" = none
+	"phone_inbox":      "/data/notes/logs/kshan/inbox",     // messages for the phone (Kshan Inbox widget)
+	"phone_inbox_old":  "/data/notes/logs/rahi/inbox",      // read-only: read/ feedback of older messages; "" = none
+	"kshan_events":     "/data/notes/logs/kshan/events.md", // event drafts from the phone
+	"kshan_events_old": "/data/notes/logs/rahi/events.md",  // read-only fallback (RahiOS); "" = none
+	"watch":            "/data/notes/logs/watch",
+	"health_site":      "/data/health-site",
+	"google_token":     "/app/config/token.json",
 }
 
 // Load reads and validates a kronos.yml.
@@ -162,7 +170,7 @@ func Parse(raw []byte, file string) (*Config, error) {
 var (
 	topKeys      = keySet("paths", "settings", "jobs")
 	settingsKeys = keySet("tick_seconds", "timeout_seconds", "catch_up_hours", "alerts")
-	jobKeys      = keySet("schedule", "description", "enabled", "timeout", "catch_up", "skip_if_busy", "watch", "command", "options")
+	jobKeys      = keySet("schedule", "description", "enabled", "timeout", "catch_up", "skip_if_busy", "run_at_start", "watch", "command", "options")
 )
 
 func keySet(keys ...string) map[string]bool {
