@@ -1,7 +1,7 @@
 # Kronos — Architecture (internal)
 
 > Complete reference for the code: every file, job, data contract and rule. Share this file (plus only the files being changed) instead of the full source.
-> Contains no secret values and no host paths. Last reviewed: 2026-11-12 (v1.2.2: Kshan module, phone paths, run_at_start).
+> Contains no secret values and no host paths. Last reviewed: 2026-11-16 (v1.2.3: watch_gold source fallback; v1.2.2: Kshan module, phone paths, run_at_start).
 
 ---
 
@@ -167,7 +167,7 @@ Dependencies: `gopkg.in/yaml.v3` (via its GitHub mirror — `replace` in go.mod)
 | User / hardening | `.env` `PUID:PGID` (image default `USER 1000:1000`), `init: true`, `read_only: true` + tmpfs `/tmp` (16 MB), `cap_drop: [ALL]`, `no-new-privileges`, `pids_limit: 256`, `mem_limit: 256m`, `stop_grace_period: 1m` |
 | TZ | `.env` `TZ` (default UTC); zone data compiled in (`time/tzdata`) |
 | Volumes | `$NOTE_PATH → /data/notes` · `$KRONOS_HEALTH_SITE → /data/health-site` · `./kronos.yml → /app/kronos.yml:ro` · `./config → /app/config` (rw: token refresh) · `./scripts → /app/scripts:ro` |
-| Network | default bridge, no ports. Outbound: `www.googleapis.com`, `oauth2.googleapis.com` (calendar_sync); `rewards.bing.com`, `cleartax.in`, `domainoffer.net`, `tld-list.com` (monitors, or your `options.url`) |
+| Network | default bridge, no ports. Outbound: `www.googleapis.com`, `oauth2.googleapis.com` (calendar_sync); `rewards.bing.com`, `www.angelone.in`, `groww.in`, `cleartax.in`, `domainoffer.net`, `tld-list.com` (monitors, or your `options.url`) |
 | `.env` | gitignored; may be a symlink to a shared homelab `.env`. Read only by compose: `NOTE_PATH` (often `${DATA_PATH}/notes`), `KRONOS_HEALTH_SITE`, `PUID`, `PGID`, `TZ`. Only `TZ` enters the container. Template: `.env.example` |
 | Secrets | none in env or repo. Google OAuth: `./config/token.json` (0600, refreshed in place) + `credentials.json` (only to regenerate the token) — both gitignored and dockerignored |
 | Ignored | `.gitignore`: `.env*` (except `.env.example`), `kronos.yml*` (except `.example`), `config/*`, `scripts/*` (except `*.example`), OAuth files anywhere, `patch/`, `*.zip`, `*.bak`, build output, editor/OS files · `.dockerignore`: the same + `.git`, docs, compose/Dockerfile |
@@ -276,7 +276,7 @@ Paths relative to `/data/notes/`.
 | `kshan_weather` | `logs/kshan/weather/location.md`, api.open-meteo.com | `logs/kshan/weather/weather.md` | `location_file`, `weather_file`, `hours` (6), `every` (60), fallback `lat` (12.925) / `lon` (77.583) / `place` (Jayanagar, Bengaluru), `timezone` (Asia/Kolkata), `fail_hours` (6), `url` |
 | `kshan_events` | `logs/kshan/events.md` (+ `logs/rahi/events.md`), `event.md`, `event.md.bck` | `event.md` (new drafts only) | `max_age_days` (30) |
 | `watch_rewards` | rewards.bing.com/redeem/in (+ /shop, /donate, /win) | `logs/watch/rewards.yml`, outbox on change | `market`, `pages`, `notify_price` (true), `notify_removed` (false), `notify` ([telegram]) |
-| `watch_gold` | cleartax.in/gold-rate-{city} | `logs/watch/gold.yml`, outbox + phone inbox on change | `city` (bangalore), `karat` (22), `url`, `pattern`, `notify` |
+| `watch_gold` | Angel One → Groww → cleartax `…{city}` pages, first with a rate (the site is stored as `source`; a different site than last time is a silent new baseline) | `logs/watch/gold.yml`, outbox + phone inbox on change | `city` (bangalore), `karat` (22), `urls`, `url`, `pattern`, `notify` |
 | `watch_domains` | domainoffer.net, tld-list.com | `logs/watch/domains.yml`, outbox + phone inbox on change | `tlds` ([ar]), `rank_by` (total), `top` (1), `sources`, `max_pages` (5), `notify` |
 
 ### 6.3 Records engine
@@ -402,7 +402,7 @@ Own package, folder and `paths.watch`; shares only the scheduler, the outbox and
 HTTP: browser User-Agent, `timeout_s` (30), one retry after 5 s on network error/5xx, 8 MB cap. HTML via regex helpers; tests pin each page shape, `--dry-run` shows layout changes at once.
 
 - **rewards** (`Catalog{items: [{sku, title, points, category, desc}]}`): cards = `<a href=…/redeem/sku/<id>>`; title = img alt, else heading, else text; points = `N pts|points`. 0 pages or 0 items → error. Notifies new items and points changes (removals optional); text-only changes silent.
-- **gold** (`Gold{city, karat, per_gram}`): `pattern` (with `{karat}`) on the page text; group 1 → number. Diff `▲/▼ ₹d from ₹old (p%)`.
+- **gold** (`Gold{city, karat, per_gram, source}`): each of `urls` (or the one `url`) in order until a page matches `pattern` (with `{karat}`; "22K" or "22 karat") on its text; group 1 → number, the site's host → `source`. Earlier sources that failed are WARN lines; all failing is the usual failed check. Diff `▲/▼ ₹d from ₹old (p%)`; a different `source` than stored is a silent new baseline (sites differ by a few %).
 - **domains** (`Domains{rank_by, tlds: {ar: [{registrar, score, transfer, renew, register, link}]}}`): domainoffer `#domain-list` (ICANN-fee column skipped, `Next` → more pages) + tld-list table by header; registrar aliases merged; best quote per registrar; cheapest `top`. A failing source is a WARN; no prices → error.
 
 ### 6.10 Kshan (`logs/kshan/`, package `internal/kshan`)
@@ -516,5 +516,6 @@ Parity check (2026-10-05): an edge-case fixture set run through every Python tas
 | 1.1.2 | Monitors (watch_rewards, watch_gold, watch_domains), `skip_if_busy` |
 | 1.2.1 | Modules (Pulse jobs moved into `internal/pulse`), health site via `.env KRONOS_HEALTH_SITE`, schedule plan, docs folded in here |
 | 1.2.2 | Kshan replaces RahiOS: module `internal/kshan` (kshan_weather from Kshan's location.md with a skip rule, kshan_events), `Ctx.Reason`, phone paths as config (`daily_logs`, `phone_inbox`, `kshan_events` + `_old` fallbacks), Pulse files → `paths.pulse`, notify channel `kshan`, `run_at_start`, `--sandbox` |
+| 1.2.3 | `watch_gold`: cleartax answered HTTP 410 (and its page was stale), so sources are now a list tried in order (Angel One, Groww, cleartax); pattern accepts "22K" and "22 karat"; `source` stored, a site change is not a price alert |
 
 Ask for changes by sharing this file plus only the file(s) being changed.

@@ -39,6 +39,47 @@ func TestDiffGold(t *testing.T) {
 	if got != "22K gold, Bangalore: ₹13,479 per gram\n▲ ₹102 from ₹13,377 (0.76%)" {
 		t.Errorf("diff %q", got)
 	}
+	// another site (or the first run after 1.2.3, no source stored): new baseline, no alert
+	if got := diffGold(nil, old, Gold{City: "bangalore", Karat: 22, PerGram: 12383.2, Source: "angelone.in"}); got != "" {
+		t.Errorf("source change should be silent, got %q", got)
+	}
+}
+
+// Angel One / Groww write "per gram for 22 karat gold (91.6% purity)".
+func TestParseGoldKarat(t *testing.T) {
+	page := `<div><h2>Gold Rate Today</h2><p>₹12,383.20 per gram for 22 karat gold (91.6% purity) and ₹13,509 per gram for 24 karat gold</p></div>`
+	for karat, want := range map[string]float64{"22": 12383.20, "24": 13509} {
+		re := regexp.MustCompile("(?i)" + strings.ReplaceAll(goldPattern, "{karat}", karat))
+		if v, err := parseGold(page, re); err != nil || v != want {
+			t.Errorf("%sK: %v %v", karat, v, err)
+		}
+	}
+}
+
+// The first source is gone (410): the next one answers and is named in the output.
+func TestGoldFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/gone/bangalore":
+			http.Error(w, "gone", http.StatusGone)
+		case "/ok/bangalore":
+			w.Write([]byte(goldPage))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c, _, out := testCtx(t, "urls: ['"+srv.URL+"/gone/{city}', '"+srv.URL+"/ok/{city}']", true)
+	if err := Run(c, goldWatcher); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "22K gold, Bangalore: ₹13,479 per gram (127.0.0.1") {
+		t.Errorf("output:\n%s", out)
+	}
+	c, _, _ = testCtx(t, "urls: ['"+srv.URL+"/gone/{city}']", true)
+	if err := Run(c, goldWatcher); err == nil || !strings.Contains(err.Error(), "HTTP 410") {
+		t.Errorf("all sources down should fail with the reason, got %v", err)
+	}
 }
 
 // End to end through a local server (options.url), dry run: prints the rate, stores nothing.

@@ -192,7 +192,7 @@ jobs:
     timeout: 120
     description: "Watch: gold rate."
     options: { city: bangalore, karat: 22 }
-    # more options: { url: 'https://cleartax.in/gold-rate-{city}', pattern: '₹\s*([\d,]+(?:\.\d+)?)\s*per gram for {karat}\s*K gold', notify: [telegram, kshan] }
+    # more options: { urls: [angelone, groww, cleartax pages, tried in order], url: one page instead, pattern: '₹\s*([\d,]+(?:\.\d+)?)\s*per gram for {karat}\s*(?:K|karat|carat)\b', notify: [telegram, kshan] }
 
   # Cheapest registrar per TLD (transfer + 1st renewal)
   watch_domains:

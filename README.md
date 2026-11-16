@@ -313,7 +313,7 @@ Monitors check something outside the homelab and tell you **only when it changes
 |---|---|---|---|
 | `watch_rewards` | rewards.bing.com/redeem/in (public pages) | `rewards.yml` | a new item appears, or an item's points change (removals optional) |
 | `watch_domains` | domainoffer.net, tld-list.com | `domains.yml` | the cheapest registrar or its prices change |
-| `watch_gold` | cleartax.in/gold-rate-&lt;city&gt; | `gold.yml` | the rate per gram differs from the stored one |
+| `watch_gold` | angelone.in, then groww.in, then cleartax.in (first with a rate) | `gold.yml` | the rate per gram differs from the stored one |
 
 **How every monitor behaves**
 - **First run** stores the current values as a baseline and sends one "now watching" message.
@@ -337,7 +337,8 @@ Monitors check something outside the homelab and tell you **only when it changes
 | domains | `top` | `1` | registrars kept per TLD |
 | domains | `sources` / `max_pages` | `[domainoffer, tld-list]` / `5` | drop `tld-list` if it keeps returning 403 |
 | gold | `city` / `karat` | `bangalore` / `22` | `{city}` in `url`, `{karat}` in `pattern` |
-| gold | `url` | `https://cleartax.in/gold-rate-{city}` | page to read |
+| gold | `urls` | Angel One, Groww, cleartax `…{city}` pages | tried in order; a rate from another site than last time is stored without an alert |
+| gold | `url` | – | one page instead of `urls` |
 | gold | `pattern` | `₹\s*([\d,]+(?:\.\d+)?)\s*per gram for {karat}\s*K gold` | regex on the page text; group 1 = rate. Another site = new `url` + `pattern` |
 
 **Try them** (inside the container):
