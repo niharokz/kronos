@@ -70,18 +70,19 @@ Any job can also have `watch: [files]`: it then runs again ~10–20 s after one 
 | `health_website` | daily 03:25 + on edit | Renders `health.md` into one static page in the nss look: classless, no JavaScript, dark/light by system. Adds a stats strip, pace per run, countdowns and a Daily activity section (steps, sleep, heart rate, calories charts) from `daily:` entries. |
 | `daily_update` | daily 03:35 | Writes the agenda: **Overdue**, **Due Today**, **Upcoming (7 days)** — events, subscriptions and `calendar.md` (lines start with the category, e.g. `BIRTHDAY- Asha`, `FESTIVAL- Karva Chauth`). |
 | `archive_rollover` | 1 Jan 03:45 | Moves loose archive files into a folder named after the previous year. |
+| `notes_backup` | daily 03:55 | The whole vault → one `notes_YYYYMMDD_HHMMSS.tar.gz` in the backups folder (`.env KRONOS_BACKUP`), read back and checked before it is kept; archives older than 30 days are deleted after a good backup. |
 | `nimo_briefing` | daily 05:40 | Sends the agenda as a *briefing* — the bot posts it and adds an AI commentary. With Pulse set up, its brief (yesterday's verdict, today's targets) is appended. |
 | `pulse_watch` | every 30 min, 08:00–22:30 | Pulse: snapshots today's phone log; nudges an app past its usual while on a strike pattern, and steps when you're unlikely to finish. |
 | `pulse_rollup` | hourly at :10 | Pulse: for each phone day that turned final — baselines, self-tightening goals, pattern warnings, weekly/monthly rollups and reports; refreshes the briefing part. |
 | `kshan_weather` | hourly at :20, at start, and when the phone's location changes | Kshan: weather for the phone's location (`logs/kshan/weather/location.md`) from open-meteo into `logs/kshan/weather/weather.md` for the Clock widget. |
-| `kshan_events` | every 30 min at :15/:45 | Kshan: event drafts typed on the phone (`e dentist fri 5pm`) become events in `event.md`. |
+| `kshan_events` | every 30 min at :17/:47 | Kshan: event drafts typed on the phone (`e dentist fri 5pm`) become events in `event.md`. |
 | `watch_rewards` | hourly at :40, skipped when busy | Monitor: new items and points changes in the public Microsoft Rewards (India) catalog. |
-| `watch_gold` | daily 11:15 | Monitor: gold rate per gram (default 22K, Bangalore). |
+| `watch_gold` | daily 11:15 | Monitor: gold rate per gram for your city (`.env KRONOS_GOLD_CITY`, default 22K). |
 | `watch_domains` | daily 11:35 | Monitor: cheapest registrar per TLD (default `.ar`, transfer + 1st renewal). |
 
-The defaults are spread so that nothing waits: lanes at :00/:30 (`pulse_watch`), :10 (`pulse_rollup`), :15/:45 (`kshan_events`), :20 (`kshan_weather`) and :40 (`watch_rewards`), and the nightly jobs 10 minutes apart in dependency order (subscriptions before Arthik drafts and events, everything before the agenda, the agenda and Pulse before the briefing).
+The defaults are spread so that nothing waits: lanes at :00/:30 (`pulse_watch`), :10 (`pulse_rollup`), :17/:47 (`kshan_events`), :20 (`kshan_weather`) and :40 (`watch_rewards`), and the nightly jobs 10 minutes apart in dependency order (subscriptions before Arthik drafts and events, everything before the agenda, the backup after the vault jobs, the agenda and Pulse before the briefing). `kronos.yml.example` lists the jobs in the order they run — start, the day's jobs by time, then the hourly lanes — and that order also decides who goes first when two jobs share a minute (only 05:40, where `watch_rewards` skips while the briefing runs).
 
-`kronos jobs` lists the built-in jobs; options per job are documented at the top of its file (`internal/jobs/`, `internal/pulse/job_*.go`, `internal/watch/`).
+`kronos jobs` lists the built-in jobs; options per job are documented at the top of its file (`internal/jobs/`, `internal/pulse/job_*.go`, `internal/kshan/`, `internal/watch/`, `internal/backup/`).
 
 ---
 
@@ -297,7 +298,7 @@ Kshan is the phone's widget app (it replaced the RahiOS launcher). It never goes
 | `kshan_weather` | `logs/kshan/weather/location.md` (Kshan's last location), open-meteo (no key) | `logs/kshan/weather/weather.md`: place, lat/lon, now (temp, feels like, words, day/night, humidity), today's min/max/rain chance, the next 6 hours |
 | `kshan_events` | `logs/kshan/events.md` — drafts from the `e` command (and RahiOS's old `logs/rahi/events.md`) | new events in `data/event.md` |
 
-- **Weather:** reads Kshan's `location.md` (`lat`, `lon`, `place`, `reason`; never written by Kronos) and runs at start, hourly and about 10–20 s after that file changes. No network call while `weather.md` is under 50 minutes old and the location hasn't changed — a location sent with `reason: tap` always fetches. Options: `location_file`, `weather_file` (relative = in the vault), `hours` (6), `every` (60), fallback `lat`/`lon`/`place` (12.925, 77.583, Jayanagar, Bengaluru) for when `location.md` is missing or unreadable, `timezone` (Asia/Kolkata), `fail_hours` (6). If open-meteo is down the old file stays; only after 6 hours of failures one alert is sent. Each run logs one line: place, lat/lon, temperature and why it ran (startup / hourly / location changed).
+- **Weather:** reads Kshan's `location.md` (`lat`, `lon`, `place`, `reason`; never written by Kronos) and runs at start, hourly and about 10–20 s after that file changes. No network call while `weather.md` is under 50 minutes old and the location hasn't changed — a location sent with `reason: tap` always fetches. Options: `location_file`, `weather_file` (relative = in the vault), `hours` (6), `every` (60), fallback `lat`/`lon`/`place` for when `location.md` is missing or unreadable (from `.env`: `KRONOS_WEATHER_LAT`, `_LON`, `_PLACE`; unset → the run is skipped until Kshan writes a location), `timezone` (`auto` = the place's zone), `fail_hours` (6). If open-meteo is down the old file stays; only after 6 hours of failures one alert is sent. Each run logs one line: place, lat/lon, temperature and why it ran (startup / hourly / location changed).
 - **Event drafts:** `e dentist fri 5pm` → *Dentist 17:00* on the coming Friday. Understood: `today`, `tomorrow`, weekdays (`fri`, `next fri`), `14 nov`, `nov 14 2027`, `15/12`, `2026-12-20`, `5pm`, `9:30am`, `17:00`, `noon`. No date → the day you typed it. Each draft is imported once (id `kshan-<when it was typed>`); drafts older than `max_age_days` (30) are ignored. Kronos never edits the drafts file.
 - **Paths** (all in `kronos.yml`): `daily_logs`, `phone_inbox`, `kshan_events`, each with an `_old` RahiOS fallback that is only read (set it to `""` to drop it); Pulse's own files in `pulse`.
 
@@ -336,7 +337,7 @@ Monitors check something outside the homelab and tell you **only when it changes
 | domains | `rank_by` | `total` | `total` (transfer + 1st renewal), `transfer`, `renew`, `register` |
 | domains | `top` | `1` | registrars kept per TLD |
 | domains | `sources` / `max_pages` | `[domainoffer, tld-list]` / `5` | drop `tld-list` if it keeps returning 403 |
-| gold | `city` / `karat` | `bangalore` / `22` | `{city}` in `url`, `{karat}` in `pattern` |
+| gold | `city` / `karat` | `${KRONOS_GOLD_CITY}` (required) / `22` | `{city}` in `url`, `{karat}` in `pattern` |
 | gold | `urls` | Angel One, Groww, cleartax `…{city}` pages | tried in order; a rate from another site than last time is stored without an alert |
 | gold | `url` | – | one page instead of `urls` |
 | gold | `pattern` | `₹\s*([\d,]+(?:\.\d+)?)\s*per gram for {karat}\s*K gold` | regex on the page text; group 1 = rate. Another site = new `url` + `pattern` |
@@ -370,10 +371,13 @@ docker exec kronos kronos run watch_rewards --dry-run
    | `DATA_PATH` | Base data folder on the host (optional; only used to build the paths below) |
    | `NOTE_PATH` | Host folder of the notes vault, e.g. `${DATA_PATH}/notes` → mounted at `/data/notes` |
    | `KRONOS_HEALTH_SITE` | Host folder the health site's `index.html` is written to → mounted at `/data/health-site` |
+   | `KRONOS_BACKUP` | Host folder for `notes_backup`'s archives → mounted at `/data/backups` (keep it outside `NOTE_PATH`) |
    | `PUID`, `PGID` | Owner of the files Kronos writes (`id -u`, `id -g`) |
-   | `TZ` | Time zone for the cron schedules |
+   | `TZ` | Time zone for the cron schedules and backup file names |
+   | `KRONOS_WEATHER_LAT`, `_LON`, `_PLACE` | Optional: `kshan_weather` fallback place when the phone's `location.md` is missing |
+   | `KRONOS_GOLD_CITY` | City for `watch_gold` (as the rate sites spell it) |
 
-   Nothing host-specific lives in the repo: `docker-compose.yml` only references these variables, and `kronos.yml` uses container paths only. Compose refuses to start if `NOTE_PATH` or `KRONOS_HEALTH_SITE` is unset. The host folders must be writable by `PUID:PGID`. `.env` can also be a symlink to a shared homelab `.env` that defines these names. No secrets go in `.env`; the only secret, the Google token, lives in `./config/` (gitignored).
+   Nothing host-specific or personal lives in the repo: `docker-compose.yml` only references these variables, and `kronos.yml` uses container paths only. Personal job values reach `kronos.yml` as `${KRONOS_…}` (see [Configuration](#configuration)), so your `kronos.yml` can stay identical to the example. Compose refuses to start if `NOTE_PATH`, `KRONOS_HEALTH_SITE` or `KRONOS_BACKUP` is unset. The host folders must be writable by `PUID:PGID`. `.env` can also be a symlink to a shared homelab `.env` that defines these names. No secrets go in `.env`; the only secret, the Google token, lives in `./config/` (gitignored).
 
 3. **Telegram (optional).** Kronos writes messages into `paths.outbox`; a bot that reads that folder sends them. With Omnimo, set its `outbox.dir` to the same folder. Without a bot, messages simply stay in the folder.
 
@@ -426,7 +430,9 @@ jobs:
     options: { purge_after_days: 365 }  # job-specific settings
 ```
 
-Config changes apply on `docker compose restart kronos`. Code changes need `docker compose up -d --build`.
+**Values from `.env`.** Any value may be `${KRONOS_NAME}` or `${KRONOS_NAME:-default}`; Kronos replaces it with that environment variable, which `docker-compose.yml` passes in from `.env` (add a line under `environment:` for a new one). Only `KRONOS_*` names are expanded and only in values, never in keys; an unset variable without a default becomes empty and the job uses its own default. Use block style for such options (`lat: ${KRONOS_WEATHER_LAT}` on its own line) — `{` `}` cannot appear unquoted inside a `{ … }` flow map.
+
+Config changes apply on `docker compose restart kronos`. Code changes need `docker compose up -d --build`. `.env` changes need `docker compose up -d`.
 
 ---
 
@@ -555,6 +561,7 @@ kronos/
 │   │   └── fixture/            fake phone logs for testing (kronos pulse-fixture)
 │   ├── kshan/                  module "Kshan": kshan_weather, kshan_events (+ when.go: dates in draft text)
 │   ├── watch/                  module "monitors": engine (watch.go, client.go) + one file per watch_<name>
+│   ├── backup/                 module "backup": notes_backup (vault → tar.gz, verified, retention)
 │   ├── store/                  YAML records, atomic writes, Python-compatible formatting
 │   ├── dates/                  date parsing and repeat rules
 │   ├── outbox/                 Telegram hand-off (outbox folder)

@@ -9,8 +9,8 @@ import (
 )
 
 const subsFixture = `subscriptions:
-  - id: elcty-bangalore
-    name: Elcty (Bangalore)
+  - id: elcty-home
+    name: Elcty (Home)
     category: utility
     amount: 800.0
     cycle: monthly
@@ -52,7 +52,7 @@ func TestArthikSubscriptions(t *testing.T) {
 	}
 	put(t, dir+"/subscription.md", subsFixture)
 	put(t, dir+"/event.md", `events:
-  - {id: sub-elcty--bangalore-2026-10-12, title: old due event, date: '2026-10-12', status: pending, frequency: none}
+  - {id: sub-elcty--home-2026-10-12, title: old due event, date: '2026-10-12', status: pending, frequency: none}
   - {id: gold-purchase, title: Gold, date: '2026-10-14', status: open, frequency: none}
 `)
 	// First run: today only. Jio Fibrenet is due today; the 12 Oct event is older.
@@ -78,13 +78,13 @@ func TestArthikSubscriptions(t *testing.T) {
 	// Kronos was down on the 15th; on the 16th it catches up the 15th's due event.
 	c.Today = c.Today.AddDate(0, 0, 2)
 	put(t, dir+"/event.md", `events:
-  - {id: sub-elcty--bangalore-2026-10-12, title: old, date: '2026-10-12', status: pending, frequency: none}
-  - {id: sub-elcty--bangalore-2026-10-15, title: due, date: '2026-10-15', status: pending, frequency: none}
+  - {id: sub-elcty--home-2026-10-12, title: old, date: '2026-10-12', status: pending, frequency: none}
+  - {id: sub-elcty--home-2026-10-15, title: due, date: '2026-10-15', status: pending, frequency: none}
 `)
 	if err := arthikSubscriptions(c); err != nil {
 		t.Fatal(err)
 	}
-	if got := ids(); got != "sub-jio-fibrenet-2026-10-14,sub-elcty--bangalore-2026-10-15" {
+	if got := ids(); got != "sub-jio-fibrenet-2026-10-14,sub-elcty--home-2026-10-15" {
 		t.Fatalf("catch-up drafts %q", got)
 	}
 	// Much later: everything is pruned, the file stays valid.

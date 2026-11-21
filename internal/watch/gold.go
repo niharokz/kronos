@@ -9,14 +9,14 @@ import (
 	"gitlab.com/niharokz/kronos/internal/job"
 )
 
-// watch_gold: today's gold rate per gram for one city and purity (default 22K, Bangalore).
+// watch_gold: today's gold rate per gram for one city and purity (default 22K).
 // Tells you when the rate differs from the last stored one.
 //
 // Sources are tried in order; the first page with a rate wins. A rate from another site than
 // last time is stored silently (sites differ by a few %, that is not a price change).
 //
 // options:
-//   city:    bangalore            {city} in the urls
+//   city:    (required)           {city} in the urls; kronos.yml takes it from .env: ${KRONOS_GOLD_CITY}
 //   karat:   22                   {karat} in pattern (24, 22, 18)
 //   urls:    [angelone, groww, cleartax pages]   tried in order
 //   url:     one page instead of urls
@@ -52,7 +52,10 @@ var goldURLs = []string{
 const goldPattern = `₹\s*([\d,]+(?:\.\d+)?)\s*per gram for {karat}\s*(?:K|karat|carat)\b`
 
 func fetchGold(c *job.Ctx, h *Client) (Gold, []string, error) {
-	g := Gold{City: strings.ToLower(c.String("city", "bangalore")), Karat: c.Int("karat", 22)} // kronos.yml: jobs.watch_gold.options
+	g := Gold{City: strings.ToLower(strings.TrimSpace(c.String("city", ""))), Karat: c.Int("karat", 22)} // kronos.yml: jobs.watch_gold.options
+	if g.City == "" {
+		return g, nil, fmt.Errorf("options.city is empty – set KRONOS_GOLD_CITY in .env")
+	}
 	pat := strings.ReplaceAll(c.String("pattern", goldPattern), "{karat}", fmt.Sprint(g.Karat))
 	re, err := regexp.Compile("(?i)" + pat)
 	if err != nil {

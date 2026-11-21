@@ -38,6 +38,13 @@ func testCtx(t *testing.T, name string, options map[string]any, dry bool) (*job.
 	}
 	_ = os.MkdirAll(filepath.Join(dir, "kronos"), 0o755)
 	out := &bytes.Buffer{}
+	if name == "kshan_weather" && options != nil { // a fallback place, as kronos.yml gets it from .env
+		for k, v := range map[string]any{"lat": 10.5, "lon": 20.25, "place": "Sample Town"} {
+			if _, set := options[k]; !set {
+				options[k] = v
+			}
+		}
+	}
 	c := job.NewCtx(context.Background(), cfg, config.Job{Name: name, Options: options}, dry, out)
 	c.Now = time.Date(2026, 11, 12, 21, 20, 0, 0, time.Local)
 	c.Today = dates.Today(c.Now)
@@ -64,7 +71,7 @@ func meteo(t *testing.T, status *int) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		q := r.URL.Query()
-		if q.Get("latitude") == "" || q.Get("timezone") != "Asia/Kolkata" || q.Get("forecast_days") != "2" ||
+		if q.Get("latitude") == "" || q.Get("timezone") != "auto" || q.Get("forecast_days") != "2" ||
 			!strings.Contains(q.Get("current"), "relative_humidity_2m") {
 			t.Errorf("query %s", r.URL.RawQuery)
 		}
@@ -186,15 +193,15 @@ func TestWeatherUsesLocation(t *testing.T) {
 	c, dir, out := testCtx(t, "kshan_weather", map[string]any{"url": srv.URL}, false)
 	c.Reason = "changed: location.md"
 	put(t, filepath.Join(dir, "vault", "logs", "kshan", "weather", "location.md"),
-		"updated: '2026-11-12 21:10:00'\nlat: 12.9719\nlon: 77.6412\naccuracy_m: 25\nplace: Indiranagar\nreason: periodic\n")
+		"updated: '2026-11-12 21:10:00'\nlat: 11.5013\nlon: 21.4987\naccuracy_m: 25\nplace: Riverside\nreason: periodic\n")
 	if err := kshanWeather(c); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "vault", "logs", "kshan", "weather", "weather.md"))
-	if !strings.Contains(string(raw), "place: Indiranagar\nlat: 12.9719\nlon: 77.6412\n") {
+	if !strings.Contains(string(raw), "place: Riverside\nlat: 11.5013\nlon: 21.4987\n") {
 		t.Errorf("location not used:\n%s", raw)
 	}
-	if !strings.Contains(out.String(), "Indiranagar (12.97, 77.64): 22.5 °C, Partly cloudy – location changed") {
+	if !strings.Contains(out.String(), "Riverside (11.5, 21.5): 22.5 °C, Partly cloudy – location changed") {
 		t.Errorf("log line:\n%s", out)
 	}
 }
@@ -202,7 +209,7 @@ func TestWeatherUsesLocation(t *testing.T) {
 // location.md: missing → fallback silently; garbled or without lat/lon → fallback with a reason;
 // a markdown file with frontmatter works; no place → the fallback place.
 func TestReadLocation(t *testing.T) {
-	fb := Location{Lat: 12.925, Lon: 77.583, Place: "Jayanagar, Bengaluru", Fallback: true}
+	fb := Location{Lat: 10.5, Lon: 20.25, Place: "Sample Town", Fallback: true}
 	dir := t.TempDir()
 	p := filepath.Join(dir, "location.md")
 	if loc, why := readLocation(p, fb); !loc.Fallback || why != "" {
@@ -212,20 +219,20 @@ func TestReadLocation(t *testing.T) {
 		"lat: [broken\n":     true,
 		"place: Somewhere\n": true,
 		"lat: 95\nlon: 77\n": true,
-		"lat: 12.97\nlon: 77.64\nplace: Home\nreason: tap\n":     false,
-		"---\nlat: 12.97\nlon: 77.64\nplace: Home\n---\nnotes\n": false,
+		"lat: 11.5\nlon: 21.5\nplace: Home\nreason: tap\n":     false,
+		"---\nlat: 11.5\nlon: 21.5\nplace: Home\n---\nnotes\n": false,
 	} {
 		put(t, p, body)
 		loc, why := readLocation(p, fb)
 		if loc.Fallback != wantFallback || (wantFallback && why == "") {
 			t.Errorf("%q: %+v %q", body, loc, why)
 		}
-		if !wantFallback && (loc.Lat != 12.97 || loc.Place != "Home") {
+		if !wantFallback && (loc.Lat != 11.5 || loc.Place != "Home") {
 			t.Errorf("%q: %+v", body, loc)
 		}
 	}
 	put(t, p, "lat: 1\nlon: 2\n")
-	if loc, _ := readLocation(p, fb); loc.Place != "Jayanagar, Bengaluru" || loc.Fallback {
+	if loc, _ := readLocation(p, fb); loc.Place != "Sample Town" || loc.Fallback {
 		t.Errorf("no place: %+v", loc)
 	}
 }
@@ -248,7 +255,7 @@ func TestWeatherSkipRule(t *testing.T) {
 		return requests - before
 	}
 
-	put(t, loc, "lat: 12.97\nlon: 77.64\nplace: Home\nreason: periodic\n")
+	put(t, loc, "lat: 11.5\nlon: 21.5\nplace: Home\nreason: periodic\n")
 	at(loc, 2*time.Hour)
 	if run() != 1 {
 		t.Fatal("no weather.md yet → fetch")
@@ -263,12 +270,12 @@ func TestWeatherSkipRule(t *testing.T) {
 	}
 	at(weather, 10*time.Minute)
 	at(loc, time.Hour)
-	put(t, loc, "lat: 12.97\nlon: 77.64\nplace: Home\nreason: tap\n")
+	put(t, loc, "lat: 11.5\nlon: 21.5\nplace: Home\nreason: tap\n")
 	at(loc, time.Hour)
 	if run() != 1 {
 		t.Error("reason: tap → fetch")
 	}
-	put(t, loc, "lat: 12.97\nlon: 77.64\nplace: Home\nreason: periodic\n")
+	put(t, loc, "lat: 11.5\nlon: 21.5\nplace: Home\nreason: periodic\n")
 	at(loc, 2*time.Hour)
 	at(weather, 55*time.Minute)
 	if run() != 1 {
@@ -287,5 +294,25 @@ func TestRunReason(t *testing.T) {
 		if c.Reason = reason; runReason(c) != want {
 			t.Errorf("%q → %q", reason, runReason(c))
 		}
+	}
+}
+
+// No location.md and no fallback lat/lon: nothing is fetched or written, and it is not a failure.
+func TestWeatherNoLocation(t *testing.T) {
+	status := 200
+	srv := meteo(t, &status)
+	requests = 0
+	c, dir, out := testCtx(t, "kshan_weather", map[string]any{"url": srv.URL, "lat": nil, "lon": "", "place": nil}, false)
+	if err := kshanWeather(c); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 0 || !strings.Contains(out.String(), "no fallback lat/lon") {
+		t.Errorf("requests=%d\n%s", requests, out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "vault", "logs", "kshan", "weather", "weather.md")); err == nil {
+		t.Error("weather.md written without a location")
+	}
+	if loc, ok := fallbackLocation(c); ok || loc.Place != "Home" {
+		t.Errorf("fallback = %+v %v", loc, ok)
 	}
 }

@@ -18,7 +18,8 @@ LABEL org.opencontainers.image.title="kronos" \
       org.opencontainers.image.description="Small modular job scheduler for a self-hosted notes vault" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.licenses="MIT"
-RUN apk add --no-cache ca-certificates
+# tzdata: script jobs (date, ls) see .env TZ too; Kronos itself has zone data built in.
+RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=build /out/kronos /app/kronos
 ENV PATH="/app:${PATH}"

@@ -1,8 +1,8 @@
 # Kshan weather - written by Kronos (open-meteo). YAML.
 updated: '2026-11-12 21:20:00'
-place: Jayanagar, Bengaluru
-lat: 12.925
-lon: 77.583
+place: Sample Town
+lat: 10.5
+lon: 20.25
 now: {temp_c: 22.5, feels_c: 23.0, code: 2, text: Partly cloudy, is_day: false, humidity: 81.0}
 today: {min_c: 18.2, max_c: 29.0, rain_pct: 65.0}
 next: # the next 6 whole hours after now, nearest first

@@ -33,8 +33,9 @@ import (
 //   weather_file   logs/kshan/weather/weather.md    relative = in the vault (paths.vault)
 //   hours          6                                next whole hours listed
 //   every          60                               minutes between refreshes (with the hourly schedule)
-//   lat, lon, place  12.925, 77.583, "Jayanagar, Bengaluru"   used when location.md is missing or unreadable
-//   timezone       Asia/Kolkata                     open-meteo's local time for `next`
+//   lat, lon, place  (none)                         used when location.md is missing or unreadable;
+//                                                   set them from .env: ${KRONOS_WEATHER_LAT} … (no fallback → skip)
+//   timezone       auto                             open-meteo's local time for `next` (auto = the place's zone)
 //   fail_hours     6                                failed fetches in a row for this long → one alert
 //   url            https://api.open-meteo.com/v1/forecast
 //
@@ -57,7 +58,16 @@ func kshanWeather(c *job.Ctx) error {
 	path := c.VaultFile("weather_file", "logs/kshan/weather/weather.md")
 	why := runReason(c)
 
-	loc, problem := readLocation(locPath, fallbackLocation(c))
+	fallback, hasFallback := fallbackLocation(c)
+	loc, problem := readLocation(locPath, fallback)
+	if loc.Fallback && !hasFallback { // no location.md and no lat/lon in the options: nothing to fetch for
+		why := problem
+		if why == "" {
+			why = filepath.Base(locPath) + " not written by Kshan yet"
+		}
+		c.Log.Skip("%s and no fallback lat/lon (.env KRONOS_WEATHER_LAT/LON) – old file kept", why)
+		return nil
+	}
 	if problem != "" {
 		c.Log.Warn("%s – using %s", problem, loc.Place)
 	}
@@ -99,10 +109,20 @@ func runReason(c *job.Ctx) string {
 	}
 }
 
-func fallbackLocation(c *job.Ctx) Location {
-	lat, _ := strconv.ParseFloat(c.String("lat", "12.925"), 64) // kronos.yml: jobs.kshan_weather.options.lat/lon/place
-	lon, _ := strconv.ParseFloat(c.String("lon", "77.583"), 64)
-	return Location{Lat: lat, Lon: lon, Place: c.String("place", "Jayanagar, Bengaluru"), Fallback: true}
+// fallbackLocation is options lat/lon/place (from .env via ${KRONOS_WEATHER_*}); ok = a valid lat/lon is set.
+func fallbackLocation(c *job.Ctx) (Location, bool) {
+	place := strings.TrimSpace(c.String("place", "")) // kronos.yml: jobs.kshan_weather.options.lat/lon/place
+	if place == "" {
+		place = "Home"
+	}
+	loc := Location{Place: place, Fallback: true}
+	lat, errLat := strconv.ParseFloat(strings.TrimSpace(c.String("lat", "")), 64)
+	lon, errLon := strconv.ParseFloat(strings.TrimSpace(c.String("lon", "")), 64)
+	if errLat != nil || errLon != nil || lat < -90 || lat > 90 || lon < -180 || lon > 180 {
+		return loc, false
+	}
+	loc.Lat, loc.Lon = lat, lon
+	return loc, true
 }
 
 // readLocation reads Kshan's location.md; missing or unusable → the fallback and a reason why.
@@ -199,7 +219,7 @@ func fetchForecast(c *job.Ctx, loc Location) (forecast, error) {
 	q.Set("current", "temperature_2m,apparent_temperature,weather_code,is_day,relative_humidity_2m")
 	q.Set("hourly", "temperature_2m,weather_code,precipitation_probability")
 	q.Set("daily", "temperature_2m_min,temperature_2m_max,precipitation_probability_max")
-	q.Set("timezone", c.String("timezone", "Asia/Kolkata"))
+	q.Set("timezone", c.String("timezone", "auto")) // kronos.yml: jobs.kshan_weather.options.timezone
 	q.Set("forecast_days", "2")
 	u := c.String("url", openMeteo) + "?" + q.Encode()
 

@@ -12,7 +12,7 @@ import (
 
 // Shaped like cleartax's page: the summary sentence plus the rate table.
 const goldPage = `<html><head><script>var x="₹1 per gram for 22K gold";</script></head><body>
-<p>As of 25th October 2026, the gold rate today in Bangalore is <b>₹14,715</b> per gram for 24K gold
+<p>As of 25th October 2026, the gold rate today in Mysuru is <b>₹14,715</b> per gram for 24K gold
 and <b>&#8377;13,479</b> per gram for 22K gold, while the 18K rate is ₹11,036 per gram.</p>
 <table><tr><th>Weight</th><th>24 Carat</th><th>22 Carat</th></tr><tr><td>1 g</td><td>₹14,715</td><td>₹13,479</td></tr></table>
 </body></html>`
@@ -31,16 +31,16 @@ func TestParseGold(t *testing.T) {
 }
 
 func TestDiffGold(t *testing.T) {
-	old := Gold{City: "bangalore", Karat: 22, PerGram: 13377}
+	old := Gold{City: "mysuru", Karat: 22, PerGram: 13377}
 	if diffGold(nil, old, old) != "" {
 		t.Error("same rate should say nothing")
 	}
-	got := diffGold(nil, old, Gold{City: "bangalore", Karat: 22, PerGram: 13479})
-	if got != "22K gold, Bangalore: ₹13,479 per gram\n▲ ₹102 from ₹13,377 (0.76%)" {
+	got := diffGold(nil, old, Gold{City: "mysuru", Karat: 22, PerGram: 13479})
+	if got != "22K gold, Mysuru: ₹13,479 per gram\n▲ ₹102 from ₹13,377 (0.76%)" {
 		t.Errorf("diff %q", got)
 	}
 	// another site (or the first run after 1.2.3, no source stored): new baseline, no alert
-	if got := diffGold(nil, old, Gold{City: "bangalore", Karat: 22, PerGram: 12383.2, Source: "angelone.in"}); got != "" {
+	if got := diffGold(nil, old, Gold{City: "mysuru", Karat: 22, PerGram: 12383.2, Source: "angelone.in"}); got != "" {
 		t.Errorf("source change should be silent, got %q", got)
 	}
 }
@@ -60,23 +60,23 @@ func TestParseGoldKarat(t *testing.T) {
 func TestGoldFallback(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/gone/bangalore":
+		case "/gone/mysuru":
 			http.Error(w, "gone", http.StatusGone)
-		case "/ok/bangalore":
+		case "/ok/mysuru":
 			w.Write([]byte(goldPage))
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer srv.Close()
-	c, _, out := testCtx(t, "urls: ['"+srv.URL+"/gone/{city}', '"+srv.URL+"/ok/{city}']", true)
+	c, _, out := testCtx(t, "city: mysuru, urls: ['"+srv.URL+"/gone/{city}', '"+srv.URL+"/ok/{city}']", true)
 	if err := Run(c, goldWatcher); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "22K gold, Bangalore: ₹13,479 per gram (127.0.0.1") {
+	if !strings.Contains(out.String(), "22K gold, Mysuru: ₹13,479 per gram (127.0.0.1") {
 		t.Errorf("output:\n%s", out)
 	}
-	c, _, _ = testCtx(t, "urls: ['"+srv.URL+"/gone/{city}']", true)
+	c, _, _ = testCtx(t, "city: mysuru, urls: ['"+srv.URL+"/gone/{city}']", true)
 	if err := Run(c, goldWatcher); err == nil || !strings.Contains(err.Error(), "HTTP 410") {
 		t.Errorf("all sources down should fail with the reason, got %v", err)
 	}
@@ -101,5 +101,13 @@ func TestGoldJobDryRun(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "watch", "gold.yml")); err == nil {
 		t.Error("dry run stored the rate")
+	}
+}
+
+// No city (KRONOS_GOLD_CITY unset): a clear failure, no request.
+func TestGoldNeedsCity(t *testing.T) {
+	c, _, _ := testCtx(t, "url: 'http://127.0.0.1:1/x'", true)
+	if err := Run(c, goldWatcher); err == nil || !strings.Contains(err.Error(), "KRONOS_GOLD_CITY") {
+		t.Errorf("want a city error, got %v", err)
 	}
 }

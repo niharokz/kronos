@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"gitlab.com/niharokz/kronos/internal/config"
 	"gitlab.com/niharokz/kronos/internal/dates"
@@ -14,6 +15,13 @@ import (
 
 // Shared test helpers: a job context on a temp dir, file writing, event lookup.
 // Each job's own tests live in <job>_test.go, next to <job>.go.
+
+// TestMain fixes the local zone (IST, like the server) before any test starts, so the
+// calendar times are deterministic without changing time.Local while servers run.
+func TestMain(m *testing.M) {
+	time.Local = time.FixedZone("IST", 5*3600+1800)
+	os.Exit(m.Run())
+}
 
 func testCtx(t *testing.T, today string, dry bool) (*job.Ctx, string, *bytes.Buffer) {
 	t.Helper()

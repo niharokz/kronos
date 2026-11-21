@@ -53,3 +53,58 @@ func TestParseErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSettingsKeepDefaults(t *testing.T) {
+	cfg, err := Parse([]byte("settings: {alerts: false}\njobs: {}\n"), "k.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Settings.Alerts || cfg.Settings.TimeoutSeconds != 900 || cfg.Settings.TickSeconds != 10 {
+		t.Fatalf("settings: %+v", cfg.Settings)
+	}
+	if cfg, err := Parse(nil, "empty.yml"); err != nil || len(cfg.Jobs) != 0 || cfg.Paths["backups"] == "" {
+		t.Fatalf("empty file: %+v %v", cfg, err)
+	}
+}
+
+// ${KRONOS_…} in values comes from the environment; unset → the default or null; other $ text stays.
+func TestParseExpandsEnv(t *testing.T) {
+	t.Setenv("KRONOS_TEST_LAT", "12.5")
+	t.Setenv("KRONOS_TEST_PLACE", "Old Town, Somewhere")
+	t.Setenv("KRONOS_TEST_DIR", "/srv/x")
+	raw := `paths: {extra: "${KRONOS_TEST_DIR}/sub"}
+jobs:
+  a:
+    schedule: '@manual'
+    options:
+      lat: ${KRONOS_TEST_LAT}
+      place: "${KRONOS_TEST_PLACE}"
+      unset: ${KRONOS_TEST_UNSET}
+      fallback: ${KRONOS_TEST_UNSET:-mysuru}
+      pattern: '^\$\{HOME\} ${NOT_KRONOS}$'
+      ${KRONOS_TEST_LAT}: key-not-expanded
+`
+	cfg, err := Parse([]byte(raw), "k.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := cfg.Jobs[0]
+	if v, ok := j.Options["lat"].(float64); !ok || v != 12.5 {
+		t.Errorf("lat = %#v", j.Options["lat"])
+	}
+	if j.String("place", "") != "Old Town, Somewhere" || j.String("fallback", "") != "mysuru" {
+		t.Errorf("options = %#v", j.Options)
+	}
+	if v, ok := j.Options["unset"]; !ok || v != nil || j.String("unset", "def") != "def" {
+		t.Errorf("unset = %#v", v)
+	}
+	if j.String("pattern", "") != `^\$\{HOME\} ${NOT_KRONOS}$` {
+		t.Errorf("pattern changed: %q", j.String("pattern", ""))
+	}
+	if _, ok := j.Options["${KRONOS_TEST_LAT}"]; !ok {
+		t.Errorf("keys must not be expanded: %#v", j.Options)
+	}
+	if cfg.Paths["extra"] != "/srv/x/sub" {
+		t.Errorf("paths.extra = %q", cfg.Paths["extra"])
+	}
+}

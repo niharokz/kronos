@@ -4,19 +4,25 @@ services:
     build:
       context: .
       args:
-        VERSION: "1.2.3"
-    image: kronos:1.2.3
+        VERSION: "1.2.4"
+    image: kronos:1.2.4
     container_name: kronos
     restart: unless-stopped
     init: true                                      # proper PID 1 for script jobs (signals, zombie reaping)
     user: "${PUID:-1000}:${PGID:-1000}"             # .env PUID/PGID: owner of every file Kronos writes
 
+    # Only these .env values enter the container; kronos.yml reads the KRONOS_* ones as ${KRONOS_…}.
     environment:
       - TZ=${TZ:-UTC}                               # .env TZ: zone for the cron times in kronos.yml
+      - KRONOS_WEATHER_LAT=${KRONOS_WEATHER_LAT:-}      # .env → kshan_weather fallback place (empty = none)
+      - KRONOS_WEATHER_LON=${KRONOS_WEATHER_LON:-}
+      - KRONOS_WEATHER_PLACE=${KRONOS_WEATHER_PLACE:-}
+      - KRONOS_GOLD_CITY=${KRONOS_GOLD_CITY:-}          # .env → watch_gold city
 
     volumes:
       - ${NOTE_PATH:?set NOTE_PATH in .env}:/data/notes   # .env NOTE_PATH → kronos.yml paths under /data/notes
       - ${KRONOS_HEALTH_SITE:?set KRONOS_HEALTH_SITE in .env}:/data/health-site  # .env → kronos.yml paths.health_site
+      - ${KRONOS_BACKUP:?set KRONOS_BACKUP in .env}:/data/backups  # .env → kronos.yml paths.backups (notes_backup)
       - ./kronos.yml:/app/kronos.yml:ro             # schedule + paths (copy from kronos.yml.example)
       - ./config:/app/config                        # kronos.yml paths.google_token (rewritten on refresh)
       - ./scripts:/app/scripts:ro                   # script jobs (command:) — no rebuild needed

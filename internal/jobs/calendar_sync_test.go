@@ -63,10 +63,7 @@ func TestCalendarSync(t *testing.T) {
 			{"id":"h1","summary":"Diwali","description":"Public holiday","start":{"date":"2026-11-08"},"end":{"date":"2026-11-09"}},
 			{"id":"h2","summary":"Karva Chauth","description":"Observance\nTo hide observances, go to Google Calendar Settings","start":{"date":"2026-10-29"},"end":{"date":"2026-10-30"}}]}`,
 	})
-	oldLocal := time.Local
-	time.Local = time.FixedZone("IST", 5*3600+1800)
 	c.Job.Options = map[string]any{"categories": map[string]any{"Cricket": "Sport"}}
-	t.Cleanup(func() { time.Local = oldLocal })
 	if err := calendarSync(c); err != nil {
 		t.Fatal(err)
 	}

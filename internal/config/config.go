@@ -8,6 +8,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 
 	"gopkg.in/yaml.v3"
@@ -78,6 +79,7 @@ var defaultPaths = map[string]string{
 	"kshan_events_old": "/data/notes/logs/rahi/events.md",  // read-only fallback (RahiOS); "" = none
 	"watch":            "/data/notes/logs/watch",
 	"health_site":      "/data/health-site",
+	"backups":          "/data/backups", // .env KRONOS_BACKUP is mounted here (notes_backup)
 	"google_token":     "/app/config/token.json",
 }
 
@@ -99,19 +101,16 @@ func Path() string {
 }
 
 // Parse parses kronos.yml contents (file is used in error messages).
+//
+// Values may use ${KRONOS_NAME} or ${KRONOS_NAME:-default}: they are replaced by that
+// container environment variable (docker-compose.yml passes it from .env), so personal
+// values such as a home location stay out of kronos.yml. Only names starting with
+// KRONOS_ are expanded, and only in values (never in keys).
 func Parse(raw []byte, file string) (*Config, error) {
-	var top struct {
-		Paths    map[string]string `yaml:"paths"`
-		Settings *Settings         `yaml:"settings"`
-		Jobs     yaml.Node         `yaml:"jobs"`
-	}
-	if err := yaml.Unmarshal(raw, &top); err != nil {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
 		return nil, fmt.Errorf("config %s: %v", file, err)
 	}
-	if err := checkKeys(raw, file); err != nil { // catch typos like "schedul:" instead of silently ignoring them
-		return nil, err
-	}
-
 	cfg := &Config{
 		File:  file,
 		Paths: map[string]string{},
@@ -125,18 +124,25 @@ func Parse(raw []byte, file string) (*Config, error) {
 	for k, v := range defaultPaths {
 		cfg.Paths[k] = v
 	}
+	if len(doc.Content) == 0 { // empty file: defaults, no jobs
+		return cfg, nil
+	}
+	if err := checkKeys(&doc, file); err != nil { // catch typos like "schedul:" instead of silently ignoring them
+		return nil, err
+	}
+	expandEnv(doc.Content[0])
+
+	var top struct {
+		Paths    map[string]string `yaml:"paths"`
+		Settings *Settings         `yaml:"settings"` // decoded over the defaults: unset keys keep them
+		Jobs     yaml.Node         `yaml:"jobs"`
+	}
+	top.Settings = &cfg.Settings
+	if err := doc.Decode(&top); err != nil {
+		return nil, fmt.Errorf("config %s: %v", file, err)
+	}
 	for k, v := range top.Paths {
 		cfg.Paths[k] = v
-	}
-	if top.Settings != nil {
-		// Unmarshal again over the defaults so unset keys keep their default.
-		var holder struct {
-			Settings *Settings `yaml:"settings"`
-		}
-		holder.Settings = &cfg.Settings
-		if err := yaml.Unmarshal(raw, &holder); err != nil {
-			return nil, fmt.Errorf("config %s: settings: %v", file, err)
-		}
 	}
 	if cfg.Settings.TickSeconds < 1 {
 		cfg.Settings.TickSeconds = 10
@@ -165,6 +171,39 @@ func Parse(raw []byte, file string) (*Config, error) {
 	return cfg, nil
 }
 
+// envRef matches ${KRONOS_NAME} and ${KRONOS_NAME:-default}.
+var envRef = regexp.MustCompile(`\$\{(KRONOS_[A-Z0-9_]+)(?::-([^}]*))?\}`)
+
+// expandEnv replaces ${KRONOS_…} in every scalar value below n (mapping keys are left alone).
+// A plain (unquoted) scalar is re-typed after expansion, so ${KRONOS_LAT} → 12.5 is a number
+// and an unset variable without a default is null (the job then uses its own default).
+func expandEnv(n *yaml.Node) {
+	switch n.Kind {
+	case yaml.DocumentNode, yaml.SequenceNode:
+		for _, c := range n.Content {
+			expandEnv(c)
+		}
+	case yaml.MappingNode:
+		for i := 1; i < len(n.Content); i += 2 {
+			expandEnv(n.Content[i])
+		}
+	case yaml.ScalarNode:
+		if !envRef.MatchString(n.Value) {
+			return
+		}
+		n.Value = envRef.ReplaceAllStringFunc(n.Value, func(ref string) string {
+			m := envRef.FindStringSubmatch(ref)
+			if v := os.Getenv(m[1]); v != "" { // env: KRONOS_* from docker-compose.yml environment:
+				return v
+			}
+			return m[2]
+		})
+		if n.Style == 0 {
+			n.Tag = "" // resolve again: number, bool, or null when empty
+		}
+	}
+}
+
 // Allowed keys at each level of kronos.yml. paths: and options: are free-form
 // (extra paths are passed to script jobs as KRONOS_<NAME>).
 var (
@@ -183,11 +222,7 @@ func keySet(keys ...string) map[string]bool {
 
 // checkKeys rejects unknown keys at the top level, under settings: and in
 // each job, so a misspelt key fails loudly instead of being ignored.
-func checkKeys(raw []byte, file string) error {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(raw, &doc); err != nil || len(doc.Content) == 0 {
-		return nil // empty file or already reported by the caller
-	}
+func checkKeys(doc *yaml.Node, file string) error {
 	root := doc.Content[0]
 	if root.Kind != yaml.MappingNode {
 		return fmt.Errorf("config %s: top level must be a mapping (paths, settings, jobs)", file)

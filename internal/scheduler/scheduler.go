@@ -229,7 +229,10 @@ func (s *Scheduler) catchUp(now time.Time) {
 
 func (s *Scheduler) enqueueDue(now time.Time) {
 	for _, t := range s.tasks {
-		if t.kind != Cron || t.next.IsZero() || now.Before(t.next) {
+		s.mu.Lock()
+		due := t.kind == Cron && !t.next.IsZero() && !now.Before(t.next) // t.next is also set by the worker
+		s.mu.Unlock()
+		if !due {
 			continue
 		}
 		if t.job.SkipIfBusy && s.busy() { // kronos.yml: jobs.<name>.skip_if_busy

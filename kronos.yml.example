@@ -2,7 +2,7 @@
 # Changes take effect on restart: docker compose restart kronos
 #
 # ── Adding a job ────────────────────────────────────────────────────────
-# Go job:     add internal/jobs/<name>.go (register "<name>"), add an entry
+# Go job:     add internal/<module>/<name>.go (register "<name>"), add an entry
 #             below with the same name, then rebuild (docker compose up -d --build).
 # Script job: put a script in ./scripts, add an entry with command:, restart.
 #             No rebuild needed.
@@ -19,6 +19,12 @@
 #   watch:       [files] — also run ~10–20 s after any of them changes
 #   command:     [program, args...] — run this instead of a built-in Go job
 #   options:     job-specific settings (see each job's file)
+#
+# ── Personal values come from .env, not from this file ─────────────────
+# Any value may be ${KRONOS_NAME} or ${KRONOS_NAME:-default}: Kronos replaces it with that
+# environment variable, which docker-compose.yml passes in from .env (only KRONOS_* names).
+# Unset and no default → empty, and the job uses its own default. So this file holds no
+# host paths, places or secrets and can stay identical to kronos.yml.example.
 
 paths:
   logs: /data/notes/logs/kronos                  # kronos_YYYYMM.log
@@ -44,6 +50,7 @@ paths:
   pulse: /data/notes/logs/pulse                  # Pulse's own files: goals.md, baseline.md, state/, weekly/, monthly/
   watch: /data/notes/logs/watch                  # monitors (watch_*): last values, failure counts
   health_site: /data/health-site                # .env KRONOS_HEALTH_SITE is mounted here (health_website)
+  backups: /data/backups                         # .env KRONOS_BACKUP is mounted here (notes_backup)
   google_token: /app/config/token.json
   # Every path is also given to command jobs as KRONOS_<NAME> (e.g. KRONOS_EVENTS).
 
@@ -54,147 +61,124 @@ settings:
   alerts: true                # failures → Telegram via Omnimo
 
 jobs:
-# ── Schedule plan (container time, TZ) ─────────────────────────────────
-# Kronos runs one job at a time, so jobs never overlap; slots are spread so
-# that nothing waits. Half-hourly/hourly lanes: :00/:30 pulse_watch (08–22), :10 pulse_rollup,
-# :15/:45 kshan_events, :20 kshan_weather (+ start, + location change), :40 watch_rewards. Nightly chain, 10 min apart:
-#   02:05 untitled_import   02:15 inbox_archive     02:25 event_archive
+# ── Schedule plan (container time, .env TZ) ────────────────────────────
+# Jobs are listed in the order they run: start, then the day's jobs by time, then the
+# hourly lanes. Kronos runs one job at a time; when two are due in the same minute the one
+# listed first goes first, so a daily job always beats an hourly one. Every slot is free:
+#   start   restarted (+ kshan_weather, run_at_start)
+#   02:05 untitled_import   02:15 inbox_archive          02:25 event_archive
 #   02:35 subscription_update → 02:45 arthik_subscriptions → 02:55 event_update
-#   03:15 calendar_sync     03:25 health_website    03:35 daily_update
-#   03:45 archive_rollover (1 Jan)   05:40 nimo_briefing (after pulse_rollup 05:10)
+#   03:15 calendar_sync     03:25 health_website         03:35 daily_update
+#   03:45 archive_rollover (1 Jan)   03:55 notes_backup (after the vault jobs)
+#   05:40 nimo_briefing (after pulse_rollup 05:10)
 #   11:15 watch_gold        11:35 watch_domains
+#   hourly lanes: :00/:30 pulse_watch (08–22), :10 pulse_rollup, :17/:47 kshan_events,
+#                 :20 kshan_weather, :40 watch_rewards (skips 05:40 while the briefing runs)
 
-  # ── Vault jobs (internal/jobs) ──
+  # ── At start ──
 
-  # Telegram notice with host uptime + RAM when Kronos starts
+  # Telegram notice with host uptime + RAM when Kronos starts (jobs: internal/jobs)
   restarted:
     schedule: "@startup"
     description: "Kronos started notice."
+    # options: { label: Nimory }
 
-  # Merge untitled inbox files into note.md
+  # ── Nightly: vault maintenance (internal/jobs), 10 min apart in dependency order ──
+
+  # 02:05 Merge untitled inbox files into note.md (before inbox_archive)
   untitled_import:
     schedule: "5 2 * * *"
     description: "Merge untitled inbox notes into note.md."
     # options: { note_file: note.md }
 
-  # Archive inbox files older than 30 days
+  # 02:15 Archive inbox files older than 30 days
   inbox_archive:
     schedule: "15 2 * * *"
     description: "Move inbox files older than 30 days to archive."
     # options: { archive_after_days: 30, exclude: [note.md, guide.md] }
 
-  # Move closed one-time events older than 30 days to backup
+  # 02:25 Move closed one-time events older than 30 days to backup (before the event writers)
   event_archive:
     schedule: "25 2 * * *"
     description: "Move closed one-time events older than 30 days to event.md.bck."
     # options: { archive_after_days: 30 }
 
-  # Advance overdue subscription due dates, create due-today events, sort
+  # 02:35 Advance overdue subscription due dates, create due-today events, sort
   subscription_update:
     schedule: "35 2 * * *"
     description: "Update subscription due dates and sort subscriptions."
 
-  # Subscriptions that fell due → drafts in Arthik's inbox (after subscription_update)
+  # 02:45 Subscriptions that fell due → drafts in Arthik's inbox (reads subscription_update's events)
   arthik_subscriptions:
     schedule: "45 2 * * *"
     description: "Hand due subscriptions to Arthik as drafts."
     # options: { max_catch_up_days: 3, keep_days: 60 }
 
-  # Advance overdue events, reopen recurring, purge old closed, sort
+  # 02:55 Advance overdue events, reopen recurring, purge old closed, sort (after both event writers)
   event_update:
     schedule: "55 2 * * *"
     description: "Update recurring events, overdue events, sorting and closed items."
     # options: { purge_after_days: 365 }
 
-  # Copy all Google Calendar events (birthdays, holidays, your events) to calendar.md
+  # 03:15 Copy all Google Calendar events (birthdays, holidays, your events) to calendar.md
   calendar_sync:
     schedule: "15 3 * * *"
     description: "Sync Google Calendar events to calendar.md."
     # options: { past_days: 7, ahead_days: 365, exclude: [], categories: { Family: family } }
 
-  # Regenerate the health site — nightly, and within seconds of a health.md edit
+  # 03:25 Regenerate the health site — nightly, and within seconds of a health.md edit
   health_website:
     schedule: "25 3 * * *"
     description: "Create Health Website."
     watch: [/data/notes/data/health.md]
 
-  # Generate the daily agenda (events, subscriptions, calendar)
+  # 03:35 Generate the daily agenda (after events, subscriptions, calendar)
   daily_update:
     schedule: "35 3 * * *"
     description: "Generate daily agenda."
     # options: { upcoming_days: 7 }
 
-  # Roll archive files into previous year's folder (1 January)
+  # 03:45 (1 January) Roll archive files into previous year's folder
   archive_rollover:
     schedule: "45 3 1 1 *"
     description: "Move archive files into previous year's folder."
 
-  # Morning briefing: agenda (+ Pulse brief) goes to Omnimo, which adds Nimo's commentary
+  # ── Nightly: backup (internal/backup) ──
+
+  # 03:55 The whole vault → paths.backups/notes_YYYYMMDD_HHMMSS.tar.gz, checked before it is kept;
+  # archives older than keep_days are deleted after a good backup. Restore: tar -xzf <file> -C <dir>
+  notes_backup:
+    schedule: "55 3 * * *"
+    timeout: 1800
+    description: "Backup: notes vault to a tar.gz in paths.backups."
+    # options: { prefix: notes, keep_days: 30, exclude: [.stversions] }
+
+  # ── Morning ──
+
+  # 05:40 Morning briefing: agenda (+ Pulse brief) goes to Omnimo, which adds Nimo's commentary
   nimo_briefing:
     schedule: "40 5 * * *"
     description: "Queue daily agenda as an Omnimo briefing."
 
-  # ── Pulse (internal/pulse): digital + health coach over Rahi's daily logs ──
-
-  # Snapshot today's Rahi log; nudge apps over their usual and steps unlikely to finish
-  pulse_watch:
-    schedule: "*/30 8-22 * * *"
-    description: "Pulse: intraday snapshot and nudges."
-
-  # Final days → baselines, goals, warnings, weekly/monthly rollups, briefing part
-  pulse_rollup:
-    schedule: "10 * * * *"
-    description: "Pulse: baselines, goals and rollups from final phone days."
-    # options: { briefing_at: '05:40' }   # keep equal to nimo_briefing's time
-
-  # ── Kshan (internal/kshan): the phone's widget app ──
-
-  # Weather for the Clock widget: Kshan's location.md → open-meteo → weather.md.
-  # Runs at start, hourly and ~10–20 s after location.md changes; skips the call while
-  # weather.md is < every−10 min old and the location is unchanged (reason: tap always fetches).
-  kshan_weather:
-    schedule: "20 * * * *"
-    run_at_start: true
-    watch: [/data/notes/logs/kshan/weather/location.md]
-    catch_up: false
-    timeout: 120
-    description: "Kshan: weather file from open-meteo."
-    options: { hours: 6, lat: 12.925, lon: 77.583, place: "Jayanagar, Bengaluru" }   # lat/lon/place: fallback when location.md is missing
-    # more options: { location_file: logs/kshan/weather/location.md, weather_file: logs/kshan/weather/weather.md, every: 60, timezone: Asia/Kolkata, fail_hours: 6 }
-
-  # Event drafts typed on the phone (`e dentist fri 5pm`) → data/event.md
-  kshan_events:
-    schedule: "15,45 * * * *"
-    catch_up: false
-    description: "Kshan: import event drafts into event.md."
-    # options: { max_age_days: 30 }
-
-  # ── Monitors (internal/watch): external sites, told only when something changes ──
+  # ── Late morning: monitors (internal/watch), told only when something changes ──
   # State: paths.watch/<name>.yml (rewritten only on change). Common options:
   #   notify: [telegram, kshan]  where changes go (Telegram via Omnimo; the phone's inbox)
   #   fail_after: 3              failed checks in a row before one alert
   #   timeout_s: 30              per request
   # Test without storing or sending: kronos run watch_<name> --dry-run
 
-  # New items / points changes in the public Microsoft Rewards (India) catalog
-  watch_rewards:
-    schedule: "40 * * * *"
-    skip_if_busy: true
-    catch_up: false
-    timeout: 300
-    description: "Watch: Microsoft Rewards catalog."
-    # options: { market: in, pages: [featured, giftcards, donate, sweepstakes], notify_price: true, notify_removed: false, notify: [telegram] }
-
-  # Gold rate per gram (any city / purity; another site via url + pattern)
+  # 11:15 Gold rate per gram (any city / purity; another site via url + pattern). City: .env KRONOS_GOLD_CITY
   watch_gold:
     schedule: "15 11 * * *"
     catch_up: false
     timeout: 120
     description: "Watch: gold rate."
-    options: { city: bangalore, karat: 22 }
+    options:
+      city: ${KRONOS_GOLD_CITY}
+      karat: 22
     # more options: { urls: [angelone, groww, cleartax pages, tried in order], url: one page instead, pattern: '₹\s*([\d,]+(?:\.\d+)?)\s*per gram for {karat}\s*(?:K|karat|carat)\b', notify: [telegram, kshan] }
 
-  # Cheapest registrar per TLD (transfer + 1st renewal)
+  # 11:35 Cheapest registrar per TLD (transfer + 1st renewal)
   watch_domains:
     schedule: "35 11 * * *"
     catch_up: false
@@ -202,6 +186,54 @@ jobs:
     description: "Watch: domain prices."
     options: { tlds: [ar], rank_by: total, top: 1 }
     # more options: { sources: [domainoffer, tld-list], max_pages: 5, notify: [telegram, kshan] }
+
+  # ── Hourly lanes (listed after the daily jobs, so those go first in a shared minute) ──
+
+  # :00/:30 08–22 Pulse (internal/pulse): snapshot today's phone log; nudge apps over their usual
+  # and steps unlikely to finish
+  pulse_watch:
+    schedule: "*/30 8-22 * * *"
+    description: "Pulse: intraday snapshot and nudges."
+
+  # :10 Pulse: final days → baselines, goals, warnings, weekly/monthly rollups, briefing part
+  pulse_rollup:
+    schedule: "10 * * * *"
+    description: "Pulse: baselines, goals and rollups from final phone days."
+    # options: { briefing_at: '05:40' }   # keep equal to nimo_briefing's time
+
+  # :17/:47 Kshan (internal/kshan): event drafts typed on the phone (`e dentist fri 5pm`) → data/event.md
+  kshan_events:
+    schedule: "17,47 * * * *"
+    catch_up: false
+    description: "Kshan: import event drafts into event.md."
+    # options: { max_age_days: 30 }
+
+  # :20 Kshan: weather for the Clock widget: Kshan's location.md → open-meteo → weather.md.
+  # Runs at start, hourly and ~10–20 s after location.md changes; skips the call while
+  # weather.md is < every−10 min old and the location is unchanged (reason: tap always fetches).
+  # lat/lon/place: fallback when location.md is missing (.env KRONOS_WEATHER_*; unset → skip until Kshan writes one)
+  kshan_weather:
+    schedule: "20 * * * *"
+    run_at_start: true
+    watch: [/data/notes/logs/kshan/weather/location.md]
+    catch_up: false
+    timeout: 120
+    description: "Kshan: weather file from open-meteo."
+    options:
+      hours: 6
+      lat: ${KRONOS_WEATHER_LAT}
+      lon: ${KRONOS_WEATHER_LON}
+      place: "${KRONOS_WEATHER_PLACE}"
+    # more options: { location_file: logs/kshan/weather/location.md, weather_file: logs/kshan/weather/weather.md, every: 60, timezone: auto, fail_hours: 6 }
+
+  # :40 Monitor: new items / points changes in the public Microsoft Rewards (India) catalog
+  watch_rewards:
+    schedule: "40 * * * *"
+    skip_if_busy: true
+    catch_up: false
+    timeout: 300
+    description: "Watch: Microsoft Rewards catalog."
+    # options: { market: in, pages: [featured, giftcards, donate, sweepstakes], notify_price: true, notify_removed: false, notify: [telegram] }
 
   # ── Example script job (no rebuild needed; see scripts/disk_check.sh.example) ──
   # disk_check:

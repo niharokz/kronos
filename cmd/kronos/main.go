@@ -18,6 +18,7 @@ import (
 	"time"
 	_ "time/tzdata" // bundled zone data, so .env TZ works in a minimal image
 
+	_ "gitlab.com/niharokz/kronos/internal/backup" // registers notes_backup
 	"gitlab.com/niharokz/kronos/internal/config"
 	"gitlab.com/niharokz/kronos/internal/job"
 	_ "gitlab.com/niharokz/kronos/internal/jobs"  // registers the vault jobs

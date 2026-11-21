@@ -16,5 +16,6 @@
 // disagree, so a half-removed job is caught by `go test`.
 //
 // Code shared by several jobs lives in helpers.go; nothing job-specific goes there.
-// Other modules register their own jobs: internal/pulse (pulse_*) and internal/watch (watch_*).
+// Other modules register their own jobs: internal/pulse (pulse_*), internal/kshan (kshan_*),
+// internal/watch (watch_*) and internal/backup (notes_backup).
 package jobs

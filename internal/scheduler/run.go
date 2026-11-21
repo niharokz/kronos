@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -89,8 +90,9 @@ func runCommand(ctx context.Context, cfg *config.Config, j config.Job, dryRun bo
 	cmd := exec.CommandContext(ctx, j.Command[0], j.Command[1:]...)
 	cmd.Env = append(os.Environ(), commandEnv(cfg, j, dryRun)...)
 	var stderr bytes.Buffer
-	cmd.Stdout = out
-	cmd.Stderr = io.MultiWriter(out, &stderr)
+	shared := &lockedWriter{w: out} // stdout and stderr are copied by two goroutines
+	cmd.Stdout = shared
+	cmd.Stderr = io.MultiWriter(shared, &stderr)
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 10 * time.Second
 
@@ -110,6 +112,18 @@ func runCommand(ctx context.Context, cfg *config.Config, j config.Job, dryRun bo
 		return errors.New(msg)
 	}
 	return fmt.Errorf("cannot run %s: %w", j.Command[0], err)
+}
+
+// lockedWriter serialises writes from a command's stdout and stderr copiers.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
 
 func commandEnv(cfg *config.Config, j config.Job, dryRun bool) []string {
